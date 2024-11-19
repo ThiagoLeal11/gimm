@@ -10,6 +10,7 @@ Papers:
 """
 
 from cgi import dolog
+from typing import final
 
 import einops
 import einops.layers.torch as einops_layers
@@ -21,7 +22,7 @@ from torch import nn, Tensor
 
 from gimm.data.diff_augment import diff_augment_policy
 from gimm.layers.norm_spectral import SpectralNorm
-from models.definition import ModuleGAN
+from gimm.models.definition import ModuleGAN
 
 
 # --------------------------------
@@ -939,8 +940,8 @@ class VitGAN(ModuleGAN):
             self.discriminator(x, do_augment=False),
         )
 
-    def generator_loss(self, x: Tensor) -> Tensor:
-        fake_imgs = self._generate_images(x)
+    def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+        fake_imgs = self._generate_images(imgs)
         g_loss = self.loss(fake_imgs, is_real=True)
         g_loss_diversity = 0
 
@@ -949,20 +950,20 @@ class VitGAN(ModuleGAN):
         if Lambda_diversity_penalty:
             g_loss_diversity = diversity_loss(fake_imgs)
 
-        return g_loss + g_loss_diversity * Lambda_diversity_penalty
+        final_loss = g_loss + g_loss_diversity * Lambda_diversity_penalty
+        return final_loss, fake_imgs.detach()
 
-    def discriminator_loss(self, x: Tensor) -> Tensor:
-        real_loss = self.loss(x, is_real=True)
-        real_bcr_loss = self.bcr_loss(x)
+    def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+        real_loss = self.loss(imgs, is_real=True)
+        real_bcr_loss = self.bcr_loss(imgs)
 
-        fake_imgs = self._generate_images(x).detach()
         fake_loss = self.loss(fake_imgs, is_real=False)
         fake_bcr_loss = self.bcr_loss(fake_imgs)
 
         # TODO: extract
         Lambda_noise_loss = 0
         noise_loss = self.loss(
-            torch.FloatTensor(np.random.rand(*fake_imgs.shape) * 2 - 1).type_as(x),
+            torch.FloatTensor(np.random.rand(*fake_imgs.shape) * 2 - 1).type_as(imgs),
             is_real=False,
         )
 

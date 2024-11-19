@@ -87,14 +87,14 @@ class GAN(ModuleGAN):
 
         return bce(self.discriminator(x), y)
 
-    def generator_loss(self, x: Tensor) -> Tensor:
-        fake_imgs = self._generate_images(x)
+    def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+        fake_imgs = self._generate_images(imgs)
         g_loss = self.loss(fake_imgs, is_real=True)
-        return g_loss
+        return g_loss, fake_imgs.detach()
 
-    def discriminator_loss(self, x: Tensor) -> Tensor:
-        real_loss = self.loss(x, is_real=True)
-        fake_loss = self.loss(self._generate_images(x).detach(), is_real=False)
+    def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+        real_loss = self.loss(imgs, is_real=True)
+        fake_loss = self.loss(fake_imgs.detach(), is_real=False)
         return (real_loss + fake_loss) / 2
 
 def bce(y_hat, y):
