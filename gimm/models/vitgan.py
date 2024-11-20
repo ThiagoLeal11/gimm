@@ -932,10 +932,13 @@ class VitGAN(ModuleGAN):
     def forward(self, z):
         return self.generator(z)
 
+    def get_latent(self, batch_size: int) -> Tensor:
+        return torch.FloatTensor(
+            np.random.normal(0, 1, (batch_size, self.latent_dim))
+        )
+
     def generate_images(self, x: Tensor) -> ImageTensor:
-        z = torch.FloatTensor(
-            np.random.normal(0, 1, (x.shape[0], self.latent_dim))
-        ).type_as(x)
+        z = self.get_latent(x.shape[0]).type_as(x)
         fake_imgs = self.generator(z)
         return fake_imgs.reshape(
             -1, self.image_size, self.image_size, self.out_features,

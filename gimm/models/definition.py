@@ -12,6 +12,13 @@ Logits = Tensor
 
 class ModuleGAN(ABC, nn.Module):
     @abstractmethod
+    def get_latent(self, batch_size: int) -> Tensor:
+        """
+        Get the latent vector from an input tensor
+        """
+        pass
+
+    @abstractmethod
     def generate_images(self, x: Tensor) -> ImageTensor:
         """
         Generate a batch of images from a latent vector

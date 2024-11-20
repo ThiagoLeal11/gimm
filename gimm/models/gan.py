@@ -76,8 +76,11 @@ class GAN(ModuleGAN):
     def forward(self, z):
         return self.generator(z)
 
+    def get_latent(self, batch_size: int) -> Tensor:
+        return torch.randn(batch_size, self.latent_dim)
+
     def generate_images(self, x: Tensor) -> ImageTensor:
-        z = torch.randn(x.shape[0], self.latent_dim).type_as(x)
+        z = self.get_latent(x.shape[0]).type_as(x)
         return self.forward(z)
 
     def loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
