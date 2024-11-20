@@ -32,7 +32,7 @@ class SpectralNorm(nn.Module):
 			v = l2normalize(torch.matmul(_w.t(), u))
 			u = l2normalize(torch.matmul(_w, v))
 
-		sigma = u.dot((_w).mv(v))
+		sigma = u.dot(_w.mv(v))
 		if not self.w_initialized:
 			self.w_init_sigma = np.array(sigma.expand_as(w).detach().cpu())
 			self.w_initialized = True

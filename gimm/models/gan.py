@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import nn, Tensor
 
-from gimm.models.definition import ModuleGAN
+from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits
 
 ShapeType = list[int]
 
@@ -76,26 +76,23 @@ class GAN(ModuleGAN):
     def forward(self, z):
         return self.generator(z)
 
-    def _generate_images(self, x: Tensor) -> Tensor:
+    def generate_images(self, x: Tensor) -> ImageTensor:
         z = torch.randn(x.shape[0], self.latent_dim).type_as(x)
         return self.forward(z)
 
-    def loss(self, x: Tensor, is_real: bool) -> Tensor:
-        y = torch.zeros(x.size(0), 1).type_as(x)
-        if is_real:
-            y = torch.ones(x.size(0), 1).type_as(x)
-
-        return bce(self.discriminator(x), y)
+    def loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
+        logits = self.discriminator(imgs)
+        return bce(logits, labels), logits
 
     def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
-        fake_imgs = self._generate_images(imgs)
-        g_loss = self.loss(fake_imgs, is_real=True)
+        fake_imgs = self.generate_images(imgs)
+        g_loss, _ = self.real_loss(fake_imgs)
         return g_loss, fake_imgs.detach()
 
     def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
-        real_loss = self.loss(imgs, is_real=True)
-        fake_loss = self.loss(fake_imgs.detach(), is_real=False)
+        real_loss, _ = self.real_loss(imgs)
+        fake_loss, _ = self.fake_loss(fake_imgs.detach())
         return (real_loss + fake_loss) / 2
 
-def bce(y_hat, y):
+def bce(y_hat: Tensor, y: Tensor) -> Tensor:
     return torch.nn.functional.binary_cross_entropy(y_hat, y)

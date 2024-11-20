@@ -22,7 +22,7 @@ from torch import nn, Tensor
 
 from gimm.data.diff_augment import diff_augment_policy
 from gimm.layers.norm_spectral import SpectralNorm
-from gimm.models.definition import ModuleGAN
+from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits
 
 
 # --------------------------------
@@ -720,7 +720,7 @@ class GeneratorViT(nn.Module):
         self,
         style_mlp_layers=8,
         patch_size=4,
-        latent_dim=512,
+        latent_dim=32,
         hidden_size=384,
         sln_parameter_size=1,
         image_size=32,
@@ -849,28 +849,31 @@ class GeneratorViT(nn.Module):
         return model_output
 
 
+def init_normal(m):
+    if type(m) == nn.Linear:
+        if 'weight' in m.__dict__.keys():
+            m.weight.data.normal_(0.0,1)
+
+
 class VitGAN(ModuleGAN):
     def __init__(
         self,
         image_size=32,
         style_mlp_layers=8,
         patch_size=4,
-        latent_dim=512, # Size of z
+        latent_dim=512,  # Size of z
         hidden_size=384,
         depth=4,
         num_heads=4,
-
         dropout_p=0.0,
         bias=True,
         weight_modulation=True,
         demodulation=False,
         siren_hidden_layers=1,
-
-        combine_patch_embeddings=False, # Generate an image from a single SIREN, instead of patch-by-patch
+        combine_patch_embeddings=False,  # Generate an image from a single SIREN, instead of patch-by-patch
         combine_patch_embeddings_size=384 * 4,  # hidden_size * 4
-
-        sln_parameter_size=384, # = hidden_size
-        out_features=3, # The number of color channels
+        sln_parameter_size=384,  # = hidden_size
+        out_features=3,  # The number of color channels
     ):
         super().__init__()
 
@@ -903,6 +906,15 @@ class VitGAN(ModuleGAN):
             demodulation=demodulation,
             out_patch_size=out_patch_size,
         )
+        # use the modules apply function to recursively apply the initialization
+        self.generator.apply(init_normal)
+
+        # TODO: pra que isso?
+        num_patches_x = int(image_size // out_patch_size)
+
+        # TODO: implementar
+        # wandb.watch(Generator)
+
         self.discriminator = ViT(
             discriminator=True,
             patch_size=patch_size * 2,
@@ -912,37 +924,36 @@ class VitGAN(ModuleGAN):
             depth=depth,
             forward_drop_p=dropout_p,
         )
+        # use the modules apply function to recursively apply the initialization
+        self.discriminator.apply(init_normal)
 
         self.criterion = nn.BCEWithLogitsLoss()
 
     def forward(self, z):
         return self.generator(z)
 
-    def _generate_images(self, x: Tensor) -> Tensor:
+    def generate_images(self, x: Tensor) -> ImageTensor:
         z = torch.FloatTensor(
             np.random.normal(0, 1, (x.shape[0], self.latent_dim))
         ).type_as(x)
         fake_imgs = self.generator(z)
         return fake_imgs.reshape(
-            -1, self.out_features, self.image_size, self.image_size
-        )
+            -1, self.image_size, self.image_size, self.out_features,
+        ).permute(0, 3, 1, 2)
 
-    def loss(self, x: Tensor, is_real: bool) -> Tensor:
-        y = torch.zeros(x.size(0), 1).type_as(x)
-        if is_real:
-            y = torch.ones(x.size(0), 1).type_as(x)
+    def loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
+        logits = self.discriminator(imgs, do_augment=True)
+        return self.criterion(logits, labels), logits
 
-        return self.criterion(self.discriminator(x, do_augment=True), y)
-
-    def bcr_loss(self, x: Tensor):
+    def bcr_loss(self, logists: Logits, imgs: ImageTensor) -> Loss:
         return torch.nn.functional.mse_loss(
-            self.discriminator(x, do_augment=True),
-            self.discriminator(x, do_augment=False),
+            logists,
+            self.discriminator(imgs, do_augment=False),
         )
 
     def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
-        fake_imgs = self._generate_images(imgs)
-        g_loss = self.loss(fake_imgs, is_real=True)
+        fake_imgs = self.generate_images(imgs)
+        g_loss, _ = self.real_loss(fake_imgs)
         g_loss_diversity = 0
 
         # TODO: extract
@@ -954,17 +965,17 @@ class VitGAN(ModuleGAN):
         return final_loss, fake_imgs.detach()
 
     def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
-        real_loss = self.loss(imgs, is_real=True)
-        real_bcr_loss = self.bcr_loss(imgs)
+        real_loss, real_logits = self.real_loss(imgs)
+        real_bcr_loss = self.bcr_loss(real_logits, imgs)
 
-        fake_loss = self.loss(fake_imgs, is_real=False)
-        fake_bcr_loss = self.bcr_loss(fake_imgs)
+        fake_imgs = fake_imgs.detach()
+        fake_loss, fake_logits = self.fake_loss(fake_imgs)
+        fake_bcr_loss = self.bcr_loss(fake_logits, fake_imgs)
 
         # TODO: extract
         Lambda_noise_loss = 0
-        noise_loss = self.loss(
+        noise_loss, _ = self.fake_loss(
             torch.FloatTensor(np.random.rand(*fake_imgs.shape) * 2 - 1).type_as(imgs),
-            is_real=False,
         )
 
         return (
