@@ -1,43 +1,38 @@
-import os
-import sys
-from typing import Any
+from dataclasses import dataclass
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import TQDMProgressBar
-# from lightning.pytorch.callbacks import TQDMProgressBar
 import torch
 import torchvision
-from pytorch_lightning.callbacks.progress.tqdm_progress import Tqdm
-from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 from gimm.datasets.cifar10 import DatasetCifar10
-from gimm.datasets.mnist import DatasetMNIST
-from gimm.models.gan import GAN
+from gimm.logs.progress import CustomProgressBar
 from gimm.models.vitgan import VitGAN
 
 
+@dataclass
 class Config:
-    data_dir: str = os.environ.get("PATH_DATASETS", ".")
+    input_size: list[int]
     batch_size: int = 64
     num_workers = 4
+    lr: float = 0.0002
+    b1: float = 0.5
+    b2: float = 0.999
+    epochs: int = 100
+    grad_accum_steps: int = 1
 
 
 class TrainModel(pl.LightningModule):
     def __init__(
         self,
-        # model: ModuleGAN,
-        channels: int,
-        width: int,
-        height: int,
+        configs: Config
     ):
         super().__init__()
         # self.model = model
-        self.save_hyperparameters()
+        self.configs = configs
+        # self.save_hyperparameters()
         self.automatic_optimization = False
 
-        # networks
-        data_shape = [channels, width, height]
-        # self.model = GAN(in_features=data_shape, latent_dim=100)
+        # self.model = GAN(in_features=configs.input_size, latent_dim=100)
         self.model = VitGAN()
 
     def forward(self, x):
@@ -82,13 +77,8 @@ class TrainModel(pl.LightningModule):
         self.log_images(fake_imgs, self.current_epoch)
 
     def configure_optimizers(self):
-        # TODO: pegar das configs
-        lr = 0.0002
-        b1 = 0.5
-        b2 = 0.99
-
-        opt_g = torch.optim.Adam(self.model.generator.parameters(), lr=lr, betas=(b1, b2))
-        opt_d = torch.optim.Adam(self.model.discriminator.parameters(), lr=lr, betas=(b1, b2))
+        opt_g = torch.optim.Adam(self.model.generator.parameters(), lr=self.configs.lr, betas=(self.configs.b1, self.configs.b2))
+        opt_d = torch.optim.Adam(self.model.discriminator.parameters(), lr=self.configs.lr, betas=(self.configs.b1, self.configs.b2))
         return [opt_g, opt_d], []
 
     def log_images(self, imgs: torch.Tensor, epoch: int):
@@ -106,62 +96,25 @@ class TrainModel(pl.LightningModule):
 
 
 def main():
-    config = Config()
+    config = Config(
+        input_size=[3, 32, 32],
+    )
     # dataset = DatasetMNIST(batch_size=config.batch_size, num_workers=config.num_workers)
     dataset = DatasetCifar10(batch_size=config.batch_size, num_workers=config.num_workers)
 
     # model = GAN(in_features=[1, 28, 28], latent_dim=100)
-    model = TrainModel(
-        channels=1,
-        width=28,
-        height=28,
-        # latent_dim=100,
-        # lr=0.0002,
-        # b1=0.5,
-        # b2=0.999,
-        # batch_size=config.batch_size,
-    )
+    model = TrainModel(config)
     # Initialize a trainer
     trainer = pl.Trainer(
         accelerator="auto",
         devices=1,
-        max_epochs=100,
+        max_epochs=config.epochs,
         callbacks=[CustomProgressBar()],
     )
 
     # Train the model ⚡
     trainer.fit(model, dataset)
 
-
-class CustomProgressBar(TQDMProgressBar):
-    BAR_FORMAT = "{l_bar}{bar:10}| {n_fmt}/{total_fmt} [{elapsed} < {remaining}],{rate_fmt} [{postfix}]"
-
-    def init_train_tqdm(self) -> Tqdm:
-        """Override this to customize the tqdm bar for training."""
-        return Tqdm(
-            ncols=250,
-            desc=self.train_description,
-            position=(2 * self.process_position),
-            disable=self.is_disabled,
-            leave=True,
-            file=sys.stdout,
-            smoothing=0,
-            bar_format=self.BAR_FORMAT,
-        )
-
-    def init_validation_tqdm(self) -> Tqdm:
-        """Override this to customize the tqdm bar for validation."""
-        # The train progress bar doesn't exist in `trainer.validate()`
-        has_main_bar = self.trainer.state.fn != "validate"
-        return Tqdm(
-            ncols=250,
-            desc=self.validation_description,
-            position=(2 * self.process_position + 1),
-            disable=True,
-            leave=True,
-            file=sys.stdout,
-            bar_format="{l_bar}{bar:50}| {n_fmt}/{total_fmt} [{elapsed} < {remaining}],{rate_fmt} [{postfix}]",
-        )
 
 if __name__ == "__main__":
     main()
