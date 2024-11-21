@@ -98,4 +98,4 @@ class GAN(ModuleGAN):
         return (real_loss + fake_loss) / 2
 
 def bce(y_hat: Tensor, y: Tensor) -> Tensor:
-    return torch.nn.functional.binary_cross_entropy(y_hat, y)
+    return torch.nn.functional.binary_cross_entropy_with_logits(y_hat, y)

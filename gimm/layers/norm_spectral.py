@@ -34,9 +34,9 @@ class SpectralNorm(nn.Module):
 
 		sigma = u.dot(_w.mv(v))
 		if not self.w_initialized:
-			self.w_init_sigma = np.array(sigma.expand_as(w).detach().cpu())
+			self.w_init_sigma = sigma.expand_as(w).clone().detach()
 			self.w_initialized = True
-		setattr(self.module, self.name, torch.tensor(self.w_init_sigma).to(sigma.device) * w / sigma.expand_as(w))
+		setattr(self.module, self.name, self.w_init_sigma * w / sigma.expand_as(w))
 
 	def _made_params(self):
 		try:

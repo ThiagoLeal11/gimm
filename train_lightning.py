@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 
 import pytorch_lightning as pl
@@ -5,8 +6,8 @@ import torch
 import torchvision
 from pytorch_lightning.loggers import WandbLogger
 
-from gimm.datasets.cifar10 import DatasetCifar10
-from gimm.datasets.mnist import DatasetMNIST
+from gimm.datasets.cifar10 import DatasetCifar10PL
+from gimm.datasets.mnist import DatasetMNISTPl
 from gimm.logs.progress import CustomProgressBar
 from gimm.models.gan import GAN
 from gimm.models.vitgan import VitGAN
@@ -24,6 +25,7 @@ class Config:
     epochs: int = 100
     grad_accum_steps: int = 1
     output_path: str = "output"
+    compile_model = False
 
 
 class TrainModel(pl.LightningModule):
@@ -38,16 +40,28 @@ class TrainModel(pl.LightningModule):
         self.save_hyperparameters(configs.__dict__)
         self.automatic_optimization = False
 
-        self.model = GAN(in_features=configs.input_size, latent_dim=100)
-        # self.model = VitGAN()
+        # self.model = GAN(in_features=configs.input_size, latent_dim=100)
+        self.model = VitGAN()
+
+        if configs.compile_model:
+            self.model.generator = torch.compile(self.model.generator)
+            self.model.discriminator = torch.compile(self.model.discriminator)
 
         self.fixed_z = self.model.get_latent(16)
+
+        self.idx = 0
 
     def forward(self, x):
         return self.model(x)
 
     def training_step(self, batch):
         imgs, _ = batch
+
+        time_start = time.time()
+
+        self.idx += 1
+        if self.idx >= 25:
+            return
 
         optimizer_g, optimizer_d = self.optimizers()
 
@@ -74,6 +88,9 @@ class TrainModel(pl.LightningModule):
 
         self.untoggle_optimizer(optimizer_d)
 
+        time_end = time.time()
+        print(f'it/s: {imgs.size(0) / (time_end - time_start)}')
+
     def validation_step(self, batch, batch_idx):
         imgs, _ = batch
 
@@ -98,11 +115,14 @@ class TrainModel(pl.LightningModule):
 
 
 def main():
+    torch.set_float32_matmul_precision("medium")
+
     config = Config(
-        input_size=[1, 28, 28],
+        # input_size=[1, 28, 28],
+        input_size=[3, 32, 32],
     )
-    dataset = DatasetMNIST(batch_size=config.batch_size, num_workers=config.num_workers)
-    # dataset = DatasetCifar10(batch_size=config.batch_size, num_workers=config.num_workers)
+    # dataset = DatasetMNIST(batch_size=config.batch_size, num_workers=config.num_workers)
+    dataset = DatasetCifar10PL(batch_size=config.batch_size, num_workers=config.num_workers)
 
     logger = WandbLogger(project=config.project)
 
@@ -110,10 +130,12 @@ def main():
     trainer = pl.Trainer(
         accelerator="auto",
         devices=1,
-        max_epochs=config.epochs,
+        max_epochs=1,  # config.epochs,
         callbacks=[CustomProgressBar()],
         logger=logger,
-        # precision="bf16-mixed",
+        precision="bf16-mixed",
+        # profiler="advanced",
+        # default_root_dir="/your/custom/path"
     )
 
     # init the model directly on the device
