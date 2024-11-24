@@ -8,7 +8,7 @@ from torchvision.datasets import MNIST
 from gimm.datasets.definition import Dataset
 
 
-class DatasetCifar10(Dataset):
+class DatasetMNIST(Dataset):
     def definitions(self):
         self.dims = (1, 28, 28)
         self.num_classes = 10
