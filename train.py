@@ -8,6 +8,7 @@ from torch.utils.data import random_split, DataLoader
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
 
+from gimm.chekpoint import Checkpoint
 from gimm.datasets.cifar10 import DatasetCifar10
 from gimm.datasets.definition import Dataset
 from gimm.datasets.mnist import DatasetMNIST
@@ -16,10 +17,8 @@ from gimm.models.gan import GAN
 from gimm.models.vitgan import VitGAN
 
 
-# TODO: save_every = 5_000
 # TODO: eval_every = 5_000
 
-# TODO: checkpoint
 # TODO: gradacumm
 # TODO: lr scheduler
 # TODO: Mind the (optimality) gap: A Gap-Aware Learning Rate Scheduler for Adversarial Nets
@@ -28,7 +27,6 @@ from gimm.models.vitgan import VitGAN
     # TODO: FID
     # TODO: IS
     # TODO: CMMD
-    # TODO:
 
 
 @dataclass
@@ -41,14 +39,26 @@ class Config:
     b1: float = 0.5
     b2: float = 0.999
 
-    total_steps: int = 100_000
-    save_every: int = 5_000
-    log_every: int = 1_000
-    eval_every: int = 5_000
+    total_steps: int = 1_000_000
+    save_every: int = 50_000
+    log_every: int = 10_000
+    eval_every: int = 50_000
+
+    # TODO: implement a scalar for checkpointing?
+    every_scalar: int = 1_000
 
     grad_accum_steps: int = 1
     output_path: str = "output"
+    resume_checkpoint: str = 'output/checkpoints/checkpoint_40000.pth.tar'
     compile_model = False
+
+    def __post_init__(self):
+        self.total_steps = self.total_steps // self.batch_size
+        self.save_every = self.save_every // self.batch_size
+        self.log_every = self.log_every // self.batch_size
+        self.eval_every = self.eval_every // self.batch_size
+
+        self.safe_log_every = self.log_every * self.batch_size
 
 
 class BaseTrainer(ABC):
@@ -62,10 +72,26 @@ class BaseTrainer(ABC):
         self.model = GAN(in_features=configs.input_size, latent_dim=100)
 
 
+        # TODO: salvar esse vetor também no checkpoint.
         self.fixed_z = self.model.get_latent(16)
 
         self.optimizer_g, self.optimizer_d = self.optimizers()
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+        # TODO: se o caminho já tiver modelos e não for resumir dar erro.
+        self.checkpoint = Checkpoint(
+            args=configs.__dict__,
+            model=self.model,
+            optimizer_generator=self.optimizer_g,
+            optimizer_discriminator=self.optimizer_d,
+            checkpoint_dir=configs.output_path + '/checkpoints/',
+        )
+
+        if configs.resume_checkpoint:
+            print('resuming_checkpoint')
+            self.step = self.checkpoint.load(configs.resume_checkpoint, should_resume_args=True)
+
 
     # TODO: separar isso igual no torchgan
     def optimizers(self):
@@ -93,8 +119,7 @@ class BaseTrainer(ABC):
         self.save_checkpoint()
 
     def save_checkpoint(self):
-        pass
-        # torch.save(self.model.state_dict(), 'checkpoint.pth')
+        self.checkpoint.save(step=self.step)
 
     def evaluate(self):
         pass
@@ -111,7 +136,7 @@ class BaseTrainer(ABC):
         self.set_model_training()
 
         train_dataloader = data.train_dataloader()
-        for batch_idx, batch in enumerate(self.infinite_dataloader(train_dataloader)):
+        for batch in self.infinite_dataloader(train_dataloader):
             batch = [b.to(self.device) for b in batch]
             metrics = self.training_step(batch)
 
@@ -120,10 +145,13 @@ class BaseTrainer(ABC):
                 train_metrics = {f'train_{k}': v for k, v in metrics.items()}
                 logger.log(step=self.step, metrics=train_metrics)
 
+            # TODO: isso pode causar problemas se o batch_size do resume não for o mesmo do checkpoint.
+            batch_idx = self.step // self.configs.batch_size
             if batch_idx >= self.configs.total_steps:
                 break
 
             if batch_idx % self.configs.save_every == 0:
+                print('Salvando checkpoint')
                 self.save_checkpoint()
 
             if batch_idx % self.configs.eval_every == 0:
@@ -174,9 +202,9 @@ def main():
     trainer = Trainer(
         config,
         loggers=[
-            LoggerConsole(interval=config.log_every),
-            # LoggerImageFile(interval=config.log_every, path=config.output_path, img_format='PNG'),
-            # LoggerWandb(experiment='test', interval=config.log_every, config=config.__dict__)
+            LoggerConsole(interval=config.safe_log_every),
+            # LoggerImageFile(interval=config.safe_log_every, path=config.output_path, img_format='PNG'),
+            # LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
         ]
     )
 
