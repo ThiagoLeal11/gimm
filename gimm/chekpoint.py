@@ -15,6 +15,7 @@ class Checkpoint:
         optimizer_generator: torch.optim.Optimizer,
         optimizer_discriminator: torch.optim.Optimizer,
         args: dict = None,
+        configs: dict = None,
         checkpoint_prefix: str = 'checkpoint-',
         checkpoint_dir: str = '',
         max_keep: int = 10,
@@ -23,6 +24,7 @@ class Checkpoint:
         self.optimizer_generator = optimizer_generator
         self.optimizer_discriminator = optimizer_discriminator
         self.args = args
+        self.configs = configs
         self.checkpoint_prefix = checkpoint_prefix
         self.checkpoint_dir = checkpoint_dir
         self.max_keep = max_keep
@@ -38,6 +40,7 @@ class Checkpoint:
             'step': step,
             'arch': type(self.model).__name__.lower(),
             'args': self.args,
+            'configs': self.configs,
             'model_state_dict': unwrap_model(self.model).state_dict(),
             'optimizer_g': self.optimizer_generator.state_dict(),
             'optimizer_d': self.optimizer_discriminator.state_dict(),
@@ -49,23 +52,20 @@ class Checkpoint:
         # TODO: Implement last.pth.tar and best.pth.tar
         pass
 
-    def load(self, checkpoint_path: str, should_resume_args: bool = False) -> int:
+    def load(self, checkpoint_path: str, should_resume_config: bool = False) -> int:
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
         if not isinstance(checkpoint, dict):
             raise ValueError('Invalid Checkpoint. Checkpoint is not a dictionary')
 
+        self.args = checkpoint['args']
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer_generator.load_state_dict(checkpoint['optimizer_g'])
         self.optimizer_discriminator.load_state_dict(checkpoint['optimizer_d'])
 
-        args = checkpoint.get('args', {})
-        if should_resume_args:
-            self.args = args
-
-        # TODO: Implement wandb resume
-        # if run_id := args.get('wanb_run_id'):
-        #     self.args['wanb_run_id'] = run_id
+        configs = checkpoint.get('configs', {})
+        if should_resume_config:
+            self.configs = configs
 
         return checkpoint['step']
 

@@ -12,7 +12,7 @@ from gimm.chekpoint import Checkpoint
 from gimm.datasets.cifar10 import DatasetCifar10
 from gimm.datasets.definition import Dataset
 from gimm.datasets.mnist import DatasetMNIST
-from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile
+from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile, get_wandb_run_id
 from gimm.models.gan import GAN
 from gimm.models.vitgan import VitGAN
 
@@ -49,7 +49,7 @@ class Config:
 
     grad_accum_steps: int = 1
     output_path: str = "output"
-    resume_checkpoint: str = 'output/checkpoints/checkpoint_40000.pth.tar'
+    resume_checkpoint: str = 'output/checkpoints/checkpoint-150_000.pth.tar'
     compile_model = False
 
     def __post_init__(self):
@@ -72,7 +72,6 @@ class BaseTrainer(ABC):
         self.model = GAN(in_features=configs.input_size, latent_dim=100)
 
 
-        # TODO: salvar esse vetor também no checkpoint.
         self.fixed_z = self.model.get_latent(16)
 
         self.optimizer_g, self.optimizer_d = self.optimizers()
@@ -81,7 +80,11 @@ class BaseTrainer(ABC):
 
         # TODO: se o caminho já tiver modelos e não for resumir dar erro.
         self.checkpoint = Checkpoint(
-            args=configs.__dict__,
+            configs=configs.__dict__,
+            args={
+                'wandb_run_id': get_wandb_run_id(loggers),
+                'fixed_z': self.fixed_z,
+            },
             model=self.model,
             optimizer_generator=self.optimizer_g,
             optimizer_discriminator=self.optimizer_d,
@@ -90,8 +93,19 @@ class BaseTrainer(ABC):
 
         if configs.resume_checkpoint:
             print('resuming_checkpoint')
-            self.step = self.checkpoint.load(configs.resume_checkpoint, should_resume_args=True)
+            self.resume_checkpoint(self.configs.resume_checkpoint)
 
+            args = self.checkpoint.args
+            self.fixed_z = args['fixed_z']
+
+            # Set the wandb resume id if a wandb logger is present
+            wandb_logger = next((logger for logger in self.loggers if isinstance(logger, LoggerWandb)), None)
+            if wandb_logger:
+                wandb_logger.set_resume(args['wandb_run_id'])
+
+        # Finished starting loggers
+        for logger in self.loggers:
+            logger.start()
 
     # TODO: separar isso igual no torchgan
     def optimizers(self):
@@ -99,9 +113,24 @@ class BaseTrainer(ABC):
         optimizer_d = torch.optim.Adam(self.model.discriminator.parameters(), lr=self.configs.lr, betas=(self.configs.b1, self.configs.b2))
         return optimizer_g, optimizer_d
 
+    def save_checkpoint(self):
+        self.checkpoint.save(step=self.step)
+
+    def resume_checkpoint(self, path: str):
+        self.step = self.checkpoint.load(path, should_resume_config=True)
+
     def before_training(self):
         self.model.generator.to(self.device)
         self.model.discriminator.to(self.device)
+
+    def before_evaluate(self):
+        pass
+
+    def after_evaluate(self):
+        pass
+
+    def after_training(self):
+        self.save_checkpoint()
 
     def set_model_training(self):
         self.model.generator.train()
@@ -115,15 +144,9 @@ class BaseTrainer(ABC):
     def training_step(self, batch) -> dict:
         pass
 
-    def after_training(self):
-        self.save_checkpoint()
-
-    def save_checkpoint(self):
-        self.checkpoint.save(step=self.step)
-
-    def evaluate(self):
-        pass
-
+    # @abstractmethod
+    # def evaluate_step(self, batch) -> dict:
+    #     pass
 
     @staticmethod
     def infinite_dataloader(dataloader):
@@ -160,6 +183,10 @@ class BaseTrainer(ABC):
                 self.set_model_training()
 
         self.after_training()
+
+    # TODO: implement evaluate training loop
+    def evaluate(self):
+        pass
 
 
 class Trainer(BaseTrainer):
@@ -204,7 +231,7 @@ def main():
         loggers=[
             LoggerConsole(interval=config.safe_log_every),
             # LoggerImageFile(interval=config.safe_log_every, path=config.output_path, img_format='PNG'),
-            # LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
+            LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
         ]
     )
 

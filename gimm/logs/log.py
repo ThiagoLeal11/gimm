@@ -19,6 +19,12 @@ class Logger(ABC):
         self.interval = interval
         self.last_logged = 0
 
+    def start(self):
+        """
+        This method is called after everything on the model is initialized and the training will start.
+        """
+        pass
+
     def should_log(self, step: int) -> bool:
         return step - self.last_logged >= self.interval or self.last_logged == 0
 
@@ -117,14 +123,24 @@ class LoggerWandb(Logger):
 
     def __init__(self, experiment: str, config: dict, tags: dict = None, resume_id: str = None, interval: int = 1_000):
         super().__init__(interval)
+        self.wandb = None
+        self.wandb_kwargs = {
+            'project': experiment,
+            'config': config,
+            'tags': tags,
+            'resume': 'must' if resume_id else None,
+            'id': resume_id if resume_id else None,
+        }
 
-        self.wandb = wandb.init(
-            project=experiment,
-            config=config,
-            tags=tags,
-            resume='must' if resume_id else None,
-            id=resume_id if resume_id else None
-        )
+    def set_resume(self, resume_id: str):
+        if not resume_id:
+            return
+
+        self.wandb_kwargs['resume'] = 'must'
+        self.wandb_kwargs['id'] = resume_id
+
+    def start(self):
+        self.wandb = wandb.init(**self.wandb_kwargs)
 
     def _log(self, step: int, metrics: dict[str, any]) -> None:
         self.wandb.log(metrics, step=step)
@@ -132,3 +148,17 @@ class LoggerWandb(Logger):
     def log_image(self, step: int, image: tensor, alt: str = None, prefix: str = None) -> None:
         img = wandb.Image(image, caption=alt)
         self.wandb.log({f"{prefix}_image": img}, step=step)
+
+    def get_run_id(self) -> str | None:
+        if not self.wandb:
+            return None
+
+        return self.wandb.run.id
+
+
+def get_wandb_run_id(loggers: list[Logger]) -> str | None:
+    for logger in loggers:
+        if isinstance(logger, LoggerWandb):
+            return logger.get_run_id()
+
+    return None
