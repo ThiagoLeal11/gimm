@@ -49,7 +49,7 @@ class Config:
 
     grad_accum_steps: int = 1
     output_path: str = "output"
-    resume_checkpoint: str = 'output/checkpoints/checkpoint-150_000.pth.tar'
+    resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000.pth.tar'
     compile_model = False
 
     def __post_init__(self):
@@ -132,14 +132,6 @@ class BaseTrainer(ABC):
     def after_training(self):
         self.save_checkpoint()
 
-    def set_model_training(self):
-        self.model.generator.train()
-        self.model.discriminator.train()
-
-    def set_model_eval(self):
-        self.model.generator.eval()
-        self.model.discriminator.eval()
-
     @abstractmethod
     def training_step(self, batch) -> dict:
         pass
@@ -156,14 +148,13 @@ class BaseTrainer(ABC):
 
     def train(self, data: Dataset):
         self.before_training()
-        self.set_model_training()
+        self.model.set_train()
 
         train_dataloader = data.train_dataloader()
         for batch in self.infinite_dataloader(train_dataloader):
             batch = [b.to(self.device) for b in batch]
             metrics = self.training_step(batch)
 
-            self.step += batch[0].size(0)
             for logger in self.loggers:
                 train_metrics = {f'train_{k}': v for k, v in metrics.items()}
                 logger.log(step=self.step, metrics=train_metrics)
@@ -178,9 +169,12 @@ class BaseTrainer(ABC):
                 self.save_checkpoint()
 
             if batch_idx % self.configs.eval_every == 0:
-                self.set_model_eval()
+                self.model.set_eval()
                 self.evaluate()
-                self.set_model_training()
+                self.model.set_train()
+
+            # All logs are taken from the start step.
+            self.step += batch[0].size(0)
 
         self.after_training()
 

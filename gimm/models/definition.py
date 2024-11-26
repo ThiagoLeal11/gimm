@@ -11,6 +11,17 @@ Logits = Tensor
 
 
 class ModuleGAN(ABC, nn.Module):
+    generator: nn.Module
+    discriminator: nn.Module
+
+    def set_train(self):
+        self.generator.train()
+        self.discriminator.train()
+
+    def set_eval(self):
+        self.generator.eval()
+        self.discriminator.eval()
+
     @abstractmethod
     def get_latent(self, batch_size: int) -> Tensor:
         """
