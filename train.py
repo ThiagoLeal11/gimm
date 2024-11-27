@@ -1,6 +1,7 @@
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Generator
 
 import torch
 from sympy.solvers.ode import infinitesimals
@@ -19,7 +20,6 @@ from gimm.models.vitgan import VitGAN
 
 # TODO: eval_every = 5_000
 
-# TODO: gradacumm
 # TODO: lr scheduler
 # TODO: Mind the (optimality) gap: A Gap-Aware Learning Rate Scheduler for Adversarial Nets
 
@@ -40,9 +40,9 @@ class Config:
     b2: float = 0.999
 
     total_steps: int = 1_000_000
-    save_every: int = 50_000
-    log_every: int = 10_000
-    eval_every: int = 50_000
+    save_every: int = 64_000
+    log_every: int = 16_000
+    eval_every: int = 64_000
 
     # TODO: implement a scalar for checkpointing?
     every_scalar: int = 1_000
@@ -53,13 +53,14 @@ class Config:
     compile_model = False
 
     def __post_init__(self):
-        # TODO: consider full batch size scaled by the gradient accumulation steps
-        self.total_steps = self.total_steps // self.batch_size
-        self.save_every = self.save_every // self.batch_size
-        self.log_every = self.log_every // self.batch_size
-        self.eval_every = self.eval_every // self.batch_size
+        self.safe_log_every = self.log_every
+        full_batch_size = self.batch_size * self.grad_accum_steps
+        print(full_batch_size)
 
-        self.safe_log_every = self.log_every * self.batch_size
+        self.total_steps //= full_batch_size
+        self.save_every //= full_batch_size
+        self.log_every //= full_batch_size
+        self.eval_every //= full_batch_size
 
 
 class BaseTrainer(ABC):
@@ -133,7 +134,7 @@ class BaseTrainer(ABC):
         self.save_checkpoint()
 
     @abstractmethod
-    def training_step(self, batch_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
+    def training_step(self, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
         pass
 
     # @abstractmethod
@@ -141,26 +142,35 @@ class BaseTrainer(ABC):
     #     pass
 
     @staticmethod
-    def infinite_dataloader(dataloader):
+    def infinite_dataloader(dataloader) -> Generator[tuple[torch.Tensor, torch.Tensor], None, None]:
         while True:
-            for batch in dataloader:
-                yield batch
+            for (imgs, labels) in dataloader:
+                if imgs.size(0) == dataloader.batch_size:
+                    yield imgs, labels
+                # Discard the last batch if it is not a full batch
 
     def train(self, data: Dataset):
         self.before_training()
         self.model.set_train()
 
+        self.optimizer_g.zero_grad()
+        self.optimizer_d.zero_grad()
+
         train_dataloader = data.train_dataloader()
-        for batch in self.infinite_dataloader(train_dataloader):
-            batch = (batch[0].to(self.device), batch[1].to(self.device))
+        for (imgs, labels) in self.infinite_dataloader(train_dataloader):
             batch_idx = self.step // self.configs.batch_size
+            accum_idx = batch_idx % self.configs.grad_accum_steps
+            is_last_accum = (accum_idx + 1) % self.configs.grad_accum_steps == 0
 
             # Execute the training step
-            metrics = self.training_step(batch_idx, batch)
+            batch = (imgs.to(self.device), labels.to(self.device))
+            metrics = self.training_step(accum_idx, batch)
 
-            for logger in self.loggers:
-                train_metrics = {f'train_{k}': v for k, v in metrics.items()}
-                logger.log(step=self.step, metrics=train_metrics)
+            if is_last_accum:
+                first_step = self.step - (accum_idx * self.configs.batch_size)
+                for logger in self.loggers:
+                    train_metrics = {f'train_{k}': v for k, v in metrics.items()}
+                    logger.log(step=first_step, metrics=train_metrics)
 
             # TODO: isso pode causar problemas se o batch_size do resume não for o mesmo do checkpoint.
             if batch_idx >= self.configs.total_steps:
@@ -176,7 +186,7 @@ class BaseTrainer(ABC):
                 self.model.set_train()
 
             # All logs are taken from the start step.
-            self.step += batch[0].size(0)
+            self.step += imgs.size(0)
 
         self.after_training()
 
@@ -187,25 +197,20 @@ class BaseTrainer(ABC):
 
 # TODO: implement d_updates_per_step and g_updates_per_step to control the number of updates per step per adversarial.
 class Trainer(BaseTrainer):
-    def training_step(self, batch_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
-        # accum_steps = self.configs.grad_accum_steps
-        # should_step = (batch_idx + 1) % accum_steps == 0
-
+    def training_step(self, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
+        accum_steps = self.configs.grad_accum_steps
+        should_step = (accum_idx + 1) % accum_steps == 0
         imgs, labels = batch
 
         time_start = time.time()
 
         # train generator
-        self.optimizer_g.zero_grad()
         g_loss, fake_imgs = self.model.generator_loss(imgs)
-        g_loss.backward()
-        self.optimizer_g.step()
+        self.backward(g_loss, self.optimizer_g, should_step=should_step)
 
         # train discriminator
-        self.optimizer_d.zero_grad()
         d_loss = self.model.discriminator_loss(imgs, fake_imgs)
-        d_loss.backward()
-        self.optimizer_d.step()
+        self.backward(d_loss, self.optimizer_d, should_step=should_step)
 
         time_end = time.time()
 
@@ -215,16 +220,16 @@ class Trainer(BaseTrainer):
         }
         return metrics
 
-    # def backward(self, loss: torch.Tensor, optimizer: torch.optim.Optimizer, should_step: bool):
-    #     accum_steps = self.configs.grad_accum_steps
-    #     if accum_steps > 1:
-    #         loss /= accum_steps
-    #
-    #     loss.backward()
-    #
-    #     if should_step:
-    #         optimizer.step()
-    #         optimizer.zero_grad()
+    def backward(self, loss: torch.Tensor, optimizer: torch.optim.Optimizer, should_step: bool):
+        accum_steps = self.configs.grad_accum_steps
+        if accum_steps > 1:
+            loss /= accum_steps
+
+        loss.backward()
+
+        if should_step:
+            optimizer.step()
+            optimizer.zero_grad()
 
 
 
