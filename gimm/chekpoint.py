@@ -19,6 +19,7 @@ class Checkpoint:
         checkpoint_prefix: str = 'checkpoint-',
         checkpoint_dir: str = '',
         max_keep: int = 10,
+        raise_if_dir_not_empty: bool = True,
     ):
         self.model = model
         self.optimizer_generator = optimizer_generator
@@ -29,9 +30,14 @@ class Checkpoint:
         self.checkpoint_dir = checkpoint_dir
         self.max_keep = max_keep
         self.extension = '.pth.tar'
+        self.raise_if_dir_not_empty = raise_if_dir_not_empty
 
         # Create checkpoint directory
         pathlib.Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+        # Ensure the checkpoint directory is empty if not resuming from a checkpoint
+        if self.raise_if_dir_not_empty and any(pathlib.Path(self.checkpoint_dir).iterdir()):
+            raise ValueError(f"Checkpoint directory {self.checkpoint_dir} is not empty and resume_checkpoint is not set.")
 
 
     def save(self, step: int):

@@ -53,6 +53,7 @@ class Config:
     compile_model = False
 
     def __post_init__(self):
+        # TODO: consider full batch size scaled by the gradient accumulation steps
         self.total_steps = self.total_steps // self.batch_size
         self.save_every = self.save_every // self.batch_size
         self.log_every = self.log_every // self.batch_size
@@ -77,8 +78,6 @@ class BaseTrainer(ABC):
         self.optimizer_g, self.optimizer_d = self.optimizers()
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
-        # TODO: se o caminho já tiver modelos e não for resumir dar erro.
         self.checkpoint = Checkpoint(
             configs=configs.__dict__,
             args={
@@ -89,6 +88,7 @@ class BaseTrainer(ABC):
             optimizer_generator=self.optimizer_g,
             optimizer_discriminator=self.optimizer_d,
             checkpoint_dir=configs.output_path + '/checkpoints/',
+            raise_if_dir_not_empty=not configs.resume_checkpoint
         )
 
         if configs.resume_checkpoint:
@@ -133,7 +133,7 @@ class BaseTrainer(ABC):
         self.save_checkpoint()
 
     @abstractmethod
-    def training_step(self, batch) -> dict:
+    def training_step(self, batch_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
         pass
 
     # @abstractmethod
@@ -152,15 +152,17 @@ class BaseTrainer(ABC):
 
         train_dataloader = data.train_dataloader()
         for batch in self.infinite_dataloader(train_dataloader):
-            batch = [b.to(self.device) for b in batch]
-            metrics = self.training_step(batch)
+            batch = (batch[0].to(self.device), batch[1].to(self.device))
+            batch_idx = self.step // self.configs.batch_size
+
+            # Execute the training step
+            metrics = self.training_step(batch_idx, batch)
 
             for logger in self.loggers:
                 train_metrics = {f'train_{k}': v for k, v in metrics.items()}
                 logger.log(step=self.step, metrics=train_metrics)
 
             # TODO: isso pode causar problemas se o batch_size do resume não for o mesmo do checkpoint.
-            batch_idx = self.step // self.configs.batch_size
             if batch_idx >= self.configs.total_steps:
                 break
 
@@ -183,8 +185,12 @@ class BaseTrainer(ABC):
         pass
 
 
+# TODO: implement d_updates_per_step and g_updates_per_step to control the number of updates per step per adversarial.
 class Trainer(BaseTrainer):
-    def training_step(self, batch) -> dict:
+    def training_step(self, batch_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
+        # accum_steps = self.configs.grad_accum_steps
+        # should_step = (batch_idx + 1) % accum_steps == 0
+
         imgs, labels = batch
 
         time_start = time.time()
@@ -208,6 +214,18 @@ class Trainer(BaseTrainer):
             'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr': lr, 'it/s': imgs.size(0) / (time_end - time_start)
         }
         return metrics
+
+    # def backward(self, loss: torch.Tensor, optimizer: torch.optim.Optimizer, should_step: bool):
+    #     accum_steps = self.configs.grad_accum_steps
+    #     if accum_steps > 1:
+    #         loss /= accum_steps
+    #
+    #     loss.backward()
+    #
+    #     if should_step:
+    #         optimizer.step()
+    #         optimizer.zero_grad()
+
 
 
 def main():
