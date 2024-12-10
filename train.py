@@ -131,6 +131,9 @@ class BaseTrainer(ABC):
     def after_training(self):
         self.save_checkpoint()
 
+    def get_image_examples(self):
+        return self.model.generate_images(self.fixed_z.to(self.device))
+
     @abstractmethod
     def training_step(self, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
         pass
@@ -164,13 +167,14 @@ class BaseTrainer(ABC):
             batch = (imgs.to(self.device), labels.to(self.device))
             metrics = self.training_step(accum_idx, batch)
 
-            if is_last_accum:
-                first_step = self.step - (accum_idx * self.configs.batch_size)
+            first_step = self.step - (accum_idx * self.configs.batch_size)
+            if is_last_accum and first_step % self.configs.log_every == 0:
+                generated_image_examples = self.get_image_examples()
                 for logger in self.loggers:
                     train_metrics = {f'train_{k}': v for k, v in metrics.items()}
                     logger.log(step=first_step, metrics=train_metrics)
+                    logger.log_image(step=first_step, image=generated_image_examples, prefix='train')
 
-            # TODO: isso pode causar problemas se o batch_size do resume não for o mesmo do checkpoint.
             if batch_idx >= self.configs.total_steps:
                 break
 
@@ -204,7 +208,7 @@ class Trainer(BaseTrainer):
 
         # train generator
         g_loss, fake_imgs = self.model.generator_loss(imgs)
-        self.backward(g_loss, self.optimizer_g, should_step=should_step)
+        self.backward(g_loss, self.lr_scheduler_g, self.optimizer_g, should_step=should_step)
 
         # train discriminator
         d_loss = self.model.discriminator_loss(imgs, fake_imgs)
