@@ -177,7 +177,7 @@ class BaseTrainer(ABC):
                 break
 
             if batch_idx % self.configs.save_every == 0:
-                print('Salvando checkpoint')
+                print('Salvando checkpoint', self.step)
                 self.save_checkpoint()
 
             if batch_idx % self.configs.eval_every == 0:

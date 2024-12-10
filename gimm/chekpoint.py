@@ -73,6 +73,13 @@ class Checkpoint:
         if should_resume_config:
             self.configs = configs
 
+        if not should_resume_config:
+            # Check if the batch_size is compatible
+            restored_full_batch_size = configs.get('batch_size', 0) * configs.get('grad_accum_steps', 1)
+            full_batch_size = self.configs.get('batch_size', 0) * self.configs.get('grad_accum_steps', 1)
+            if restored_full_batch_size != full_batch_size:
+                raise ValueError(f"Restored batch size {restored_full_batch_size} is not compatible with the current batch size {full_batch_size}. Please set resume_config to True, or change the batch_size or grad_accum_steps in the current config.")
+
         return checkpoint['step']
 
 
