@@ -16,6 +16,8 @@ from gimm.datasets.mnist import DatasetMNIST
 from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile, get_wandb_run_id
 from gimm.models.gan import GAN
 from gimm.models.vitgan import VitGAN
+from gimm.scheduler.constant import ConstantLR
+from gimm.scheduler.scheduler import Scheduler
 
 
 # TODO: eval_every = 5_000
@@ -64,20 +66,19 @@ class Config:
 
 
 class BaseTrainer(ABC):
-    def __init__(self, configs: Config, loggers: list[Logger]):
+    def __init__(self, model: ModuleGAN, configs: Config, loggers: list[Logger], device: torch.device = None):
         self.configs = configs
         self.loggers = loggers
         self.step = 0
 
-
-        # self.model = VitGAN()
-        self.model = GAN(in_features=configs.input_size, latent_dim=100)
-
-
+        self.model = model
         self.fixed_z = self.model.get_latent(16)
 
         self.optimizer_g, self.optimizer_d = self.optimizers()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        self.lr_scheduler_g = ConstantLR(optimizer=self.optimizer_g)
+        self.lr_scheduler_d = ConstantLR(optimizer=self.optimizer_d)
 
         self.checkpoint = Checkpoint(
             configs=configs.__dict__,
@@ -210,17 +211,20 @@ class Trainer(BaseTrainer):
 
         # train discriminator
         d_loss = self.model.discriminator_loss(imgs, fake_imgs)
-        self.backward(d_loss, self.optimizer_d, should_step=should_step)
+        self.backward(d_loss, self.lr_scheduler_d, self.optimizer_d, should_step=should_step)
 
         time_end = time.time()
 
-        lr = self.optimizer_g.param_groups[0]['lr']
+        lr_g = self.optimizer_g.param_groups[0]['lr']
+        lr_d = self.optimizer_d.param_groups[0]['lr']
+        it_s = imgs.size(0) / (time_end - time_start)
         metrics = {
-            'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr': lr, 'it/s': imgs.size(0) / (time_end - time_start)
+            'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr_g': lr_g, 'lr_d': lr_d, 'it/s': it_s
         }
         return metrics
 
-    def backward(self, loss: torch.Tensor, optimizer: torch.optim.Optimizer, should_step: bool):
+    # TODO: create a custom optimizer to join optimizers and lr_schedulers
+    def backward(self, loss: torch.Tensor, lr_scheduler: Scheduler, optimizer: torch.optim.Optimizer, should_step: bool):
         accum_steps = self.configs.grad_accum_steps
         if accum_steps > 1:
             loss /= accum_steps
@@ -231,6 +235,7 @@ class Trainer(BaseTrainer):
             optimizer.step()
             optimizer.zero_grad()
 
+            lr_scheduler.step(current_loss=loss.item())
 
 
 def main():
@@ -243,14 +248,16 @@ def main():
 
     # dataset = DatasetCifar10(batch_size=config.batch_size, num_workers=config.num_workers)
     dataset = DatasetMNIST(batch_size=config.batch_size, num_workers=config.num_workers)
+
     trainer = Trainer(
-        config,
+        # model = VitGAN()
+        model = GAN(in_features=config.input_size),
+        configs=config,
         loggers=[
             LoggerConsole(interval=config.safe_log_every),
             # LoggerImageFile(interval=config.safe_log_every, path=config.output_path, img_format='PNG'),
             LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
-        ]
-    )
+        ],)
 
     trainer.train(dataset)
 
