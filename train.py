@@ -4,16 +4,13 @@ from dataclasses import dataclass
 from typing import Generator
 
 import torch
-from sympy.solvers.ode import infinitesimals
-from torch.utils.data import random_split, DataLoader
-from torchvision import transforms
-from torchvision.datasets import CIFAR10
 
 from gimm.chekpoint import Checkpoint
 from gimm.datasets.cifar10 import DatasetCifar10
 from gimm.datasets.definition import Dataset
 from gimm.datasets.mnist import DatasetMNIST
 from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile, get_wandb_run_id
+from gimm.models.definition import ModuleGAN
 from gimm.models.gan import GAN
 from gimm.models.vitgan import VitGAN
 from gimm.scheduler.constant import ConstantLR
