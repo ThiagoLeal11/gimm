@@ -1,3 +1,4 @@
+import math
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -28,20 +29,21 @@ from gimm.scheduler.scheduler import Scheduler
     # TODO: CMMD
 
 
+# TODO: add continuous shufflling for dataset (seed += 1 for each rerun)
+
+# Implement adam for classifier and adabelief for generator https://arxiv.org/pdf/2411.03999v1 (verify FID)
+# Implement AdaBelief https://arxiv.org/pdf/2010.07468
+
+
 @dataclass
 class Config:
     input_size: list[int]
-    batch_size: int = 64
+    batch_size: int = 128
     num_workers = 4
     project='gimm'
     lr: float = 0.0002
     b1: float = 0.5
     b2: float = 0.999
-
-    total_steps: int = 1_000_000
-    save_every: int = 64_000
-    log_every: int = 16_000
-    eval_every: int = 64_000
 
     # TODO: implement a scalar for checkpointing?
     every_scalar: int = 1_000
@@ -51,15 +53,39 @@ class Config:
     resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000.pth.tar'
     compile_model = False
 
-    def __post_init__(self):
-        self.safe_log_every = self.log_every
-        full_batch_size = self.batch_size * self.grad_accum_steps
-        print(full_batch_size)
+    log_train_images: int = 128
 
-        self.total_steps //= full_batch_size
-        self.save_every //= full_batch_size
-        self.log_every //= full_batch_size
-        self.eval_every //= full_batch_size
+    # Training controls
+    epochs: int = 128
+    checkpoint_freq : float = 1  # 1.0 means save every epoch
+    log_freq: float = 0.1  # 0.1 means log every 10% of the total steps
+    log_image_freq: float = 1  # 1.0 means log every epoch
+
+    # Private vars
+    steps_total: int = None
+    steps_save: int = None
+    steps_log: int = None
+    steps_image: int = None
+    steps_eval: int = None
+
+    def __post_init__(self):
+        self.full_batch_size = self.batch_size * self.grad_accum_steps
+
+        # TODO: better name
+        self.max_updates_adversaries = max(self.g_updates_per_step, self.d_updates_per_step)
+
+    def adjust_to_batch(self, value: float) -> int:
+        return math.floor(value // self.full_batch_size) * self.full_batch_size
+
+    def compute_controls(self, dataset_size: int):
+        # Always drop the last batch if it is not a full batch_size
+        steps_per_epoch = self.adjust_to_batch(dataset_size)
+
+        self.steps_total = self.epochs * steps_per_epoch
+        self.steps_save = self.adjust_to_batch(steps_per_epoch * self.checkpoint_freq)
+        self.steps_log = self.adjust_to_batch(steps_per_epoch * self.log_freq)
+        self.steps_image = self.adjust_to_batch(steps_per_epoch * self.log_image_freq)
+        self.steps_eval = self.adjust_to_batch(steps_per_epoch * self.log_image_freq)
 
 
 class BaseTrainer(ABC):
@@ -69,7 +95,7 @@ class BaseTrainer(ABC):
         self.step = 0
 
         self.model = model
-        self.fixed_z = self.model.get_latent(16)
+        self.fixed_z = self.model.get_latent(configs.log_train_images)
 
         self.optimizer_g, self.optimizer_d = self.optimizers()
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -157,38 +183,47 @@ class BaseTrainer(ABC):
         self.optimizer_g.zero_grad()
         self.optimizer_d.zero_grad()
 
+        step = self.step
         train_dataloader = data.train_dataloader()
+
+        # Adjust the steps to the dataset
+        self.configs.compute_controls(len(train_dataloader.dataset))
+
         for (imgs, labels) in self.infinite_dataloader(train_dataloader):
-            batch_idx = self.step // self.configs.batch_size
-            accum_idx = batch_idx % self.configs.grad_accum_steps
-            is_last_accum = (accum_idx + 1) % self.configs.grad_accum_steps == 0
+            metrics = {}
+            for accum_idx in range(self.configs.grad_accum_steps):
+                start_idx = accum_idx * self.configs.batch_size
+                end_idx = start_idx + self.configs.batch_size
 
-            # Execute the training step
-            batch = (imgs.to(self.device), labels.to(self.device))
-            metrics = self.training_step(accum_idx, batch)
+                # Execute the training step
+                batch = (imgs[start_idx:end_idx].to(self.device), labels[start_idx:end_idx].to(self.device))
+                metrics = self.training_step(accum_idx, batch)
 
-            first_step = self.step - (accum_idx * self.configs.batch_size)
-            if is_last_accum and first_step % self.configs.log_every == 0:
-                generated_image_examples = self.get_image_examples()
+            if step % self.configs.steps_log == 0:
                 for logger in self.loggers:
                     train_metrics = {f'train_{k}': v for k, v in metrics.items()}
-                    logger.log(step=first_step, metrics=train_metrics)
-                    logger.log_image(step=first_step, image=generated_image_examples, prefix='train')
+                    logger.log(step=step, metrics=train_metrics)
 
-            if batch_idx >= self.configs.total_steps:
+            if step % self.configs.steps_image == 0:
+                generated_image_examples = self.get_image_examples()
+                for logger in self.loggers:
+                    logger.log_image(step=step, image=generated_image_examples, prefix='train')
+
+            if step >= self.configs.steps_total:
                 break
 
-            if batch_idx % self.configs.save_every == 0:
+            if step % self.configs.steps_save == 0 and step > 0:
                 print('Salvando checkpoint', self.step)
                 self.save_checkpoint()
 
-            if batch_idx % self.configs.eval_every == 0:
+            if step % self.configs.steps_eval == 0:
                 self.model.set_eval()
                 self.evaluate()
                 self.model.set_train()
 
             # All logs are taken from the start step.
             self.step += imgs.size(0)
+            step = self.step
 
         self.after_training()
 
@@ -200,19 +235,18 @@ class BaseTrainer(ABC):
 # TODO: implement d_updates_per_step and g_updates_per_step to control the number of updates per step per adversarial.
 class Trainer(BaseTrainer):
     def training_step(self, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
-        accum_steps = self.configs.grad_accum_steps
-        should_step = (accum_idx + 1) % accum_steps == 0
+        is_last_accum_batch = (accum_idx + 1) % self.configs.grad_accum_steps == 0
         imgs, labels = batch
 
         time_start = time.time()
 
         # train generator
         g_loss, fake_imgs = self.model.generator_loss(imgs)
-        self.backward(g_loss, self.lr_scheduler_g, self.optimizer_g, should_step=should_step)
+        self.backward(g_loss, self.lr_scheduler_g, self.optimizer_g, should_step=is_last_accum_batch)
 
         # train discriminator
         d_loss = self.model.discriminator_loss(imgs, fake_imgs)
-        self.backward(d_loss, self.lr_scheduler_d, self.optimizer_d, should_step=should_step)
+        self.backward(d_loss, self.lr_scheduler_d, self.optimizer_d, should_step=is_last_accum_batch)
 
         time_end = time.time()
 
@@ -246,18 +280,19 @@ def main():
         input_size=[1, 28, 28],
         # input_size=[3, 32, 32],
     )
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # dataset = DatasetCifar10(batch_size=config.batch_size, num_workers=config.num_workers)
-    dataset = DatasetMNIST(batch_size=config.batch_size, num_workers=config.num_workers)
+    dataset = DatasetMNIST(batch_size=config.full_batch_size, num_workers=config.num_workers, pin_memory_device=device)
 
     trainer = Trainer(
         # model = VitGAN()
         model = GAN(in_features=config.input_size),
         configs=config,
         loggers=[
-            LoggerConsole(interval=config.safe_log_every),
-            # LoggerImageFile(interval=config.safe_log_every, path=config.output_path, img_format='PNG'),
-            LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
+            LoggerConsole(),
+            LoggerImageFile(path=config.output_path, img_format='PNG'),
+            # LoggerWandb(experiment='test', interval=config.safe_log_every, config=config.__dict__)
         ],)
 
     trainer.train(dataset)
