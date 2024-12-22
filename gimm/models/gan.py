@@ -23,16 +23,16 @@ class Discriminator(nn.Module):
         super().__init__()
 
         self.model = nn.Sequential(
-            nn.Linear(int(np.prod(in_features)), 512),
+            nn.Linear(int(np.prod(in_features)), 512, bias=True),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(512, 256),
+            nn.Linear(512, 256, bias=True),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(256, 1),
+            nn.Linear(256, 1, bias=True),
             nn.Sigmoid(),
         )
 
     def forward(self, img):
-        img_flat = img.view(img.size(0), -1)
+        img_flat = torch.flatten(img, 1)
         validity = self.model(img_flat)
 
         return validity
@@ -43,19 +43,24 @@ class Generator(nn.Module):
         super().__init__()
         self.in_features = in_features
 
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
-            if normalize:
-                layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.01, inplace=True))
-            return layers
-
         self.model = nn.Sequential(
-            *block(latent_dim, 128, normalize=False),
-            *block(128, 256),
-            *block(256, 512),
-            *block(512, 1024),
-            nn.Linear(1024, int(np.prod(in_features))),
+            nn.Linear(latent_dim, 128, bias=True),
+            nn.LeakyReLU(0.2, True),
+
+            nn.Linear(128, 256, bias=False),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(0.2, True),
+
+            nn.Linear(256, 512, bias=False),
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.2, True),
+
+            nn.Linear(512, 1024, bias=False),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2, True),
+
+            # Output: channels * image size * image size.
+            nn.Linear(1024, int(np.prod(in_features)), bias=True),
             nn.Tanh(),
         )
 
@@ -95,7 +100,7 @@ class GAN(ModuleGAN):
     def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
         real_loss, _ = self.real_loss(imgs)
         fake_loss, _ = self.fake_loss(fake_imgs.detach())
-        return (real_loss + fake_loss) / 2
+        return real_loss + fake_loss
 
 def bce(y_hat: Tensor, y: Tensor) -> Tensor:
-    return torch.nn.functional.binary_cross_entropy_with_logits(y_hat, y)
+    return torch.nn.functional.binary_cross_entropy(y_hat, y)
