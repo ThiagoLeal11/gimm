@@ -2,12 +2,9 @@ import csv
 import pathlib
 from abc import ABC, abstractmethod
 
+import torchvision
 import wandb
 from torch import tensor
-from PIL import Image
-
-
-# TODO: Implement log image
 
 
 class Logger(ABC):
@@ -15,7 +12,7 @@ class Logger(ABC):
     interval: int
     last_logged: int
 
-    def __init__(self, interval: int = 1_000):
+    def __init__(self, interval: int = 1):
         self.interval = interval
         self.last_logged = 0
 
@@ -51,7 +48,7 @@ class LoggerCsvFile(Logger):
         write_header (bool): Whether to write the header row in the CSV file.
     """
 
-    def __init__(self, path: str, interval: int = 1_000, write_header: bool = True):
+    def __init__(self, path: str, interval: int = 1, write_header: bool = True):
         super().__init__(interval)
         self.path = path
         self.write_header = write_header
@@ -84,7 +81,7 @@ class LoggerConsole(Logger):
 
 
 class LoggerImageFile(Logger):
-    def __init__(self, path: str, interval: int = 1_000, img_format: str = "PNG"):
+    def __init__(self, path: str, interval: int = 1, img_format: str = "PNG"):
         super().__init__(interval)
         self.path = path
         self.img_format = img_format
@@ -93,14 +90,13 @@ class LoggerImageFile(Logger):
         pass
 
     def log_image(self, step: int, image: tensor, alt: str = None, prefix: str = None) -> None:
-        if not image:
+        if image is None:
             return
 
         image_path = pathlib.Path(self.path) / prefix / f"step_{step}.{self.img_format}"
         image_path.parent.mkdir(parents=True, exist_ok=True)
 
-        img = Image.fromarray(image)
-        img.save(image_path, format=self.img_format)
+        torchvision.utils.save_image(image, image_path, format=self.img_format)
 
 
 # TODO: Implement LoggerTQDM
@@ -121,7 +117,7 @@ class LoggerWandb(Logger):
 
         raise Exception("LoggerWandb is a singleton class. Only one instance is allowed.")
 
-    def __init__(self, experiment: str, config: dict, tags: dict = None, resume_id: str = None, interval: int = 1_000):
+    def __init__(self, experiment: str, config: dict, tags: dict = None, resume_id: str = None, interval: int = 1):
         super().__init__(interval)
         self.wandb = None
         self.wandb_kwargs = {
