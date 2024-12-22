@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Literal
 
+import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
@@ -11,11 +12,15 @@ class Dataset(ABC):
         batch_size: int,
         num_workers: int = 1,
         data_dir: str = ".",
+        shuffle: bool = True,
+        pin_memory_device: torch.device = None
     ):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.shuffle = shuffle
+        self.pin_memory_device: str = str(pin_memory_device) if pin_memory_device else ""
 
         self.dims = None
         self.num_classes = None
@@ -44,6 +49,10 @@ class Dataset(ABC):
             self.dataset_train,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            shuffle=self.shuffle,
+            pin_memory=bool(self.pin_memory_device),
+            pin_memory_device=self.pin_memory_device,
+
         )
 
     def val_dataloader(self):
@@ -54,6 +63,8 @@ class Dataset(ABC):
             self.dataset_val,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=bool(self.pin_memory_device),
+            pin_memory_device=self.pin_memory_device,
         )
 
     def test_dataloader(self):
@@ -64,4 +75,6 @@ class Dataset(ABC):
             self.dataset_test,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=bool(self.pin_memory_device),
+            pin_memory_device=self.pin_memory_device,
         )
