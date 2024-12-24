@@ -10,6 +10,7 @@ from gimm.chekpoint import Checkpoint
 from gimm.datasets.cifar10 import DatasetCifar10
 from gimm.datasets.definition import Dataset
 from gimm.datasets.mnist import DatasetMNIST
+from gimm.eval.metrics.fid import compute_fid
 from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile, get_wandb_run_id
 from gimm.models.definition import ModuleGAN
 from gimm.models.gan import GAN
@@ -218,7 +219,7 @@ class BaseTrainer(ABC):
 
             if step % self.configs.steps_eval == 0:
                 self.model.set_eval()
-                self.evaluate()
+                self.evaluate(data)
                 self.model.set_train()
 
             # All logs are taken from the start step.
@@ -228,8 +229,34 @@ class BaseTrainer(ABC):
         self.after_training()
 
     # TODO: implement evaluate training loop
-    def evaluate(self):
-        pass
+    def evaluate(self, data: Dataset):
+        self.before_evaluate()
+        dataloader = data.train_dataloader()
+        self.model.set_eval()
+
+        # get 50.000 real images
+        real_imgs = None
+        for imgs, _ in dataloader:
+            if real_imgs is None:
+                real_imgs = imgs
+
+            remaining = 1_000 - real_imgs.size(0)
+            if remaining <= 0:
+                break
+
+            real_imgs = torch.cat([real_imgs, imgs[:remaining]], dim=0)
+
+        # get 50.000 fake images
+        latent = self.model.get_latent(1_000)
+        fake_imgs = self.model.generate_images(latent)
+
+        real_imgs = real_imgs.view(1_000, 1, 28, 28).expand(-1, 3, -1, -1)
+        fake_imgs = fake_imgs.view(1_000, 1, 28, 28).expand(-1, 3, -1, -1)
+
+        fid = compute_fid(real_imgs, fake_imgs)
+        print(f'FID: {fid}')
+
+
 
 
 # TODO: implement d_updates_per_step and g_updates_per_step to control the number of updates per step per adversarial.
