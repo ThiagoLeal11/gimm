@@ -20,7 +20,7 @@ class Dataset(ABC):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.shuffle = shuffle
-        self.pin_memory_device: str = str(pin_memory_device) if pin_memory_device else ""
+        self.pin_memory_device: str = str(pin_memory_device) if str(pin_memory_device).lower() != 'cpu' else ""
 
         self.dims = None
         self.num_classes = None

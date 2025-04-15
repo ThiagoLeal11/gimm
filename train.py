@@ -1,16 +1,21 @@
 import math
+import os
+import pathlib
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Generator
 
 import torch
+import torchvision
+from tqdm import tqdm
 
 from gimm.chekpoint import Checkpoint
 from gimm.datasets.cifar10 import DatasetCifar10
 from gimm.datasets.definition import Dataset
 from gimm.datasets.mnist import DatasetMNIST
-from gimm.eval.metrics.fid import compute_fid
+from gimm.eval.compute import EvalMetric
+from gimm.eval.metrics.fid import FrechetInceptionDistance
 from gimm.logs.log import Logger, LoggerConsole, LoggerWandb, LoggerImageFile, get_wandb_run_id
 from gimm.models.definition import ModuleGAN
 from gimm.models.gan import GAN
@@ -230,33 +235,50 @@ class BaseTrainer(ABC):
 
     # TODO: implement evaluate training loop
     def evaluate(self, data: Dataset):
+        print('starting evaluation')
+
         self.before_evaluate()
         dataloader = data.train_dataloader()
         self.model.set_eval()
 
-        # get 50.000 real images
-        real_imgs = None
-        for imgs, _ in dataloader:
-            if real_imgs is None:
-                real_imgs = imgs
+        # TODO: why have samples as a parameter?
+        fid = FrechetInceptionDistance(samples=50_000, device=self.device)
 
-            remaining = 1_000 - real_imgs.size(0)
-            if remaining <= 0:
+        img_count = 0
+        # get 50.000 real images
+        for imgs, _ in dataloader:
+            if img_count >= 50_000:
                 break
 
-            real_imgs = torch.cat([real_imgs, imgs[:remaining]], dim=0)
+            batch_size = imgs.size(0)
+            batch_size = min(batch_size, 50_000 - img_count)
 
-        # get 50.000 fake images
-        latent = self.model.get_latent(1_000)
-        fake_imgs = self.model.generate_images(latent)
-
-        real_imgs = real_imgs.view(1_000, 1, 28, 28).expand(-1, 3, -1, -1)
-        fake_imgs = fake_imgs.view(1_000, 1, 28, 28).expand(-1, 3, -1, -1)
-
-        fid = compute_fid(real_imgs, fake_imgs)
-        print(f'FID: {fid}')
+            if img_count % (50_000 / (batch_size * 10)) == 0:
+                print(f'Processed {img_count} images')
+            img_count += batch_size
 
 
+            real_imgs = imgs[:batch_size]
+            # Transform from black and white to RGB
+            real_imgs = real_imgs.view(batch_size, 1, 28, 28).expand(-1, 3, -1, -1)
+
+            # Save images to disk
+            # output_dir = os.path.join(self.configs.output_path, 'dataset/eval/mnist')
+            # os.makedirs(output_dir, exist_ok=True)
+            # for i in range(batch_size):
+            #     img_path = os.path.join(output_dir, f'img_{img_count + i:05d}.png')
+            #     torchvision.utils.save_image(real_imgs[i], img_path)
+
+            fid.update((real_imgs, torch.ones(batch_size).type_as(imgs)))
+
+            # fake_imgs = self.model.generate_images(self.model.get_latent(batch_size))
+            # # Transform from black and white to RGB
+            # fake_imgs = fake_imgs.view(batch_size, 1, 28, 28).expand(-1, 3, -1, -1)
+            #
+            # fid.update((fake_imgs, torch.zeros(batch_size).type_as(fake_imgs)))
+
+        fid_value = fid.compute()
+        print(f'FID: {fid_value}')
 
 
 # TODO: implement d_updates_per_step and g_updates_per_step to control the number of updates per step per adversarial.

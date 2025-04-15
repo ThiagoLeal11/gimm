@@ -3,4 +3,7 @@ torchvision==0.20.1
 lightning==2.4.0
 pytorch-lightning==2.4.0
 einops==0.8.0
-pillow==10.2.0
+pillow==10.3.0
+numpy~=1.26.3
+scipy~=1.14.1
+wandb~=0.18.7

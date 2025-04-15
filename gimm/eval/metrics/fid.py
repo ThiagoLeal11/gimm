@@ -1,49 +1,86 @@
+import json
+
 import numpy as np
 import scipy
 import torch
 from torch import Tensor
 from torchvision import transforms
 
+from gimm.eval.compute import EvalMetric
 from gimm.eval.models.inception_v3 import InceptionV3
+from reference.fid_score import altered_main
 
 
-def compute_fid(real_imgs: Tensor, fake_imgs: Tensor) -> float:
-    """
-    Compute the Frechet Inception Distance between two sets of images.
-    """
-    model = InceptionV3(resize_input=False, normalize_input=False)
-    transform = transforms.Compose([
-        transforms.Resize(
-            size=(299, 299),
-            interpolation=transforms.InterpolationMode.BILINEAR,
-            antialias=True
-        )
-    ])
+class FrechetInceptionDistance(EvalMetric):
+    def __init__(self, samples: int, device: torch.device = None):
+        super().__init__(samples, device)
 
-    real_imgs = transform(real_imgs)
-    fake_imgs = transform(fake_imgs)
+        self.real_activations = []
+        self.fake_activations = []
 
-    real_activations = get_activations(real_imgs, model)
-    fake_activations = get_activations(fake_imgs, model)
+        self.model = InceptionV3(resize_input=True)
+        self.model.to(self.device)
 
-    real_mu = np.mean(real_activations, axis=0)
-    real_sigma = np.cov(real_activations, rowvar=False)
+        self.model.eval()
 
-    fake_mu = np.mean(fake_activations, axis=0)
-    fake_sigma = np.cov(fake_activations, rowvar=False)
+        self.transform = transforms.Compose([
+            transforms.Resize(
+                size=(299, 299),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+                antialias=True
+            )
+        ])
 
-    fid_value = calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
-    return fid_value
+    def reset_real_distribution(self) -> None:
+        self.real_activations = []
+        self.real_dist = {}
 
+    def reset_fake_distribution(self) -> None:
+        self.fake_activations = []
 
-def get_activations(imgs: Tensor, model: InceptionV3) -> Tensor:
-    """
-    Get the activations of the Inception model for a batch of images
-    """
-    model.eval()
-    with torch.no_grad():
-        pred = model(imgs)[0]
-    return pred.cpu().numpy()
+    def update(self, batch: tuple[Tensor, Tensor]) -> None:
+        imgs, labels = batch
+        real_imgs, fake_imgs = imgs[labels == 1], imgs[labels == 0]
+
+        if self.should_compute_real_distribution() and real_imgs.size(0) > 0:
+            activations = self._get_activations(real_imgs)
+            self.real_activations.append(activations.cpu().numpy())
+
+        activations = self._get_activations(fake_imgs)
+        self.fake_activations.append(activations.cpu().numpy())
+
+    def compute(self) -> dict[str, any]:
+        self.real_activations = np.concatenate(self.real_activations, axis=0)
+        # self.fake_activations = np.concatenate(self.fake_activations, axis=0)
+
+        real_mu = np.mean(self.real_activations, axis=0)
+        real_sigma = np.cov(self.real_activations, rowvar=False)
+
+        # fake_mu = np.mean(self.fake_activations, axis=0)
+        # fake_sigma = np.cov(self.fake_activations, rowvar=False)
+
+        self.real_dist = {
+            "mu": real_mu,
+            "sigma": real_sigma
+        }
+
+        ground_mu, ground_sigma = altered_main()
+        # # Compared the two numpy arrays
+        # diff = {
+        #     "mu": np.linalg.norm(real_mu - ground_mu),
+        #     "sigma": np.linalg.norm(real_sigma - ground_sigma)
+        # }
+        # print(json.dumps({k: v.tolist() for k, v in diff.items()}))
+        # raise ValueError("Stop All")
+
+        # return calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
+        return calculate_frechet_distance(real_mu, real_sigma, ground_mu, ground_sigma)
+
+    def _get_activations(self, imgs: Tensor) -> Tensor:
+        scaled_imgs = self.transform(imgs).to(self.device)
+        with torch.no_grad():
+            pred = self.model(scaled_imgs)[0]
+        return pred.squeeze(3).squeeze(2)
 
 
 def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
