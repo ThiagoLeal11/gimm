@@ -64,7 +64,7 @@ class Generator(nn.Module):
             nn.Tanh(),
         )
 
-    def forward(self, z):
+    def forward(self, z: Tensor):
         img = self.model(z)
         img = img.view(img.size(0), *self.in_features)
         return img
