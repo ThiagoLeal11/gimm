@@ -17,22 +17,29 @@ class SchedulerFunction(ABC):
 class Scheduler(ABC):
     def __init__(
         self,
-        optimizer: torch.optim.Optimizer,
         param_name: str = "lr",
         last_step: int = -1,
+        updates_per_step: int = 1,
     ):
-        self.optimizer = optimizer
+        self.optimizer: torch.optim.Optimizer = None
         self.param_name = param_name
         self.initial_param_name = f"initial_{param_name}"
+        self.updates_per_step = updates_per_step
 
         self.last_step = last_step
         self.current_step = 0
 
-        self.base_lrs: list[float] = [
+        self.base_lrs: list[float] = []
+        self.current_loss = 0.0
+
+    def construct(self, optimizer: torch.optim.Optimizer) -> 'Scheduler':
+        self.optimizer = optimizer
+
+        self.base_lrs = [
             group.get(self.initial_param_name) or group.get(self.param_name)
             for group in self.optimizer.param_groups
         ]
-        self.current_loss = 0.0
+        return self
 
     def state_dict(self) -> dict[str, any]:
         return {

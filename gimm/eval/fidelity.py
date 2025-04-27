@@ -161,7 +161,7 @@ def compute_metrics(model: ModuleGAN, dataloader: DataLoader, metrics: list[Fide
         "input2_model_num_samples": config['samples'],
         "batch_size": config['batch_size'],
         "verbose": config['verbose'],
-        "cuda": config['device'] != "cpu",
+        "cuda": config['device'].type != "cpu",
     }
     for metric in metrics:
         kwargs.update(metric.compile())

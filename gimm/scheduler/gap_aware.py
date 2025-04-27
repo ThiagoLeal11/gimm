@@ -69,16 +69,16 @@ class GapAwareLR(Scheduler):
 
     def __init__(
         self,
-        optimizer,
         param_name: str = "lr",
         last_step: int = -1,
+        updates_per_step: int = 1,
         ideal_loss: float = log(4),
         x_min: float = 0.1,
         x_max: float = 0.1,
         h_min: float = 0.1,
         f_max: float = 2.0,
     ):
-        super(GapAwareLR, self).__init__(optimizer, param_name, last_step)
+        super(GapAwareLR, self).__init__(param_name, last_step, updates_per_step)
 
         self.ideal_loss = ideal_loss
         self.x_min = x_min
