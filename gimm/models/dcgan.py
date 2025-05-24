@@ -9,8 +9,9 @@ import torch.nn.functional as F
 __all__ = ["DCGANGenerator", "DCGANDiscriminator"]
 
 from torch import Tensor
+from typing_extensions import Optional
 
-from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits
+from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits, Size
 
 
 class DCGANGenerator(nn.Module):
@@ -234,17 +235,24 @@ class DCGANDiscriminator(nn.Module):
 
 
 class DCGAN(ModuleGAN):
-    def __init__(self, in_features: list[int], latent_dim: int = 100):
+    def __init__(self, in_features: Optional[Size] = None, latent_dim: int = 100):
         super().__init__()
+
+        self.in_features = in_features
+        self.latent_dim = latent_dim
+
+    def construct(self, in_features: Size) -> 'DCGAN':
+        in_features = in_features or self.in_features
+        assert in_features is not None, "in_features must be provided"
 
         assert len(in_features) == 3, "in_features must be a list of 3 integers (channels, height, width)"
         assert in_features[0] in [1, 3], "in_features[0] must be either 1 (grayscale) or 3 (RGB)"
         assert in_features[1] == in_features[2], "in_features[1] and in_features[2] must be equal (height and width)"
         channels, img_size = in_features[0], in_features[1]
 
-        self.latent_dim = latent_dim
-        self.generator = DCGANGenerator(encoding_dims=latent_dim, out_size=img_size, out_channels=channels)
+        self.generator = DCGANGenerator(encoding_dims=self.latent_dim, out_size=img_size, out_channels=channels)
         self.discriminator = DCGANDiscriminator(in_size=img_size, in_channels=channels)
+        return self
 
     def forward(self, z):
         return self.generator(z)

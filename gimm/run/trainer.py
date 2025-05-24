@@ -9,8 +9,8 @@ from gimm.datasets.definition import Dataset
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
 from gimm.logs.log import Logger, get_wandb_run_id, LoggerWandb
 from gimm.models.definition import ModuleGAN
-from gimm.run.optimizer import Optimizer, Adam
-from gimm.scheduler.constant import ConstantLR
+from gimm.run.loader import dataset_loader
+from gimm.run.optimizer import Optimizer
 from gimm.scheduler.scheduler import Scheduler
 
 
@@ -38,20 +38,22 @@ class TrainerConfig:
     images_to_log: int = 128
 
     # Optimizers
-    g_optimizer: Optimizer = Adam()
-    d_optimizer: Optimizer = Adam()
+    g_optimizer: Optimizer = None
+    d_optimizer: Optimizer = None
 
     # Schedulers
-    g_scheduler: Scheduler = ConstantLR()
-    d_scheduler: Scheduler = ConstantLR()
+    g_scheduler: Scheduler = None
+    d_scheduler: Scheduler = None
 
     # Checkpoint
     output_path: str = "output"
     resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000.pth.tar'
 
-    # TODO: implement dataset in config option
     # Useful for distribute default configs for the model training
     dataset: Optional[str] = None
+    dataset_dir: Optional[str] = '.'
+
+    device: Optional[torch.device] = None
 
     def __post_init__(self):
         assert  self.steps_per_batch >= 1, "steps_per_batch must be at least 1."
@@ -66,20 +68,20 @@ class TrainerConfig:
 
 
 class Trainer:
-    def __init__(self, model: ModuleGAN, configs: TrainerConfig, loggers: list[Logger], eval_metrics: list[FidelityEvalMetric], device: torch.device = None):
+    def __init__(self, model: ModuleGAN, configs: TrainerConfig, loggers: list[Logger], eval_metrics: list[FidelityEvalMetric]):
         self.configs = configs
         self.loggers = loggers
         self.step = 0
 
         self.model = model
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = configs.device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
-        self.optimizer_g = configs.g_optimizer.construct(self.model.generator.parameters())
-        self.optimizer_d = configs.d_optimizer.construct(self.model.discriminator.parameters())
-        self.lr_scheduler_g = configs.g_scheduler.construct(optimizer=self.optimizer_g)
-        self.lr_scheduler_d = configs.d_scheduler.construct(optimizer=self.optimizer_d)
+        self.optimizer_g: torch.optim.Optimizer = None
+        self.optimizer_d: torch.optim.Optimizer = None
+        self.lr_scheduler_g: Scheduler = None
+        self.lr_scheduler_d: Scheduler = None
 
         self.checkpoint = Checkpoint(
             configs=configs.__dict__,
@@ -111,6 +113,23 @@ class Trainer:
             logger.start()
 
         self.eval_metrics = eval_metrics
+        self.is_model_constructed = False
+
+    def construct_model(self, data: Dataset):
+        if self.is_model_constructed:
+            return
+
+        # Construct the model with the input dimensions given by the dataset
+        self.model.construct(in_features=data.dims)
+        self.optimizer_g = self.configs.g_optimizer.construct(self.model.generator.parameters())
+        self.optimizer_d = self.configs.d_optimizer.construct(self.model.discriminator.parameters())
+        self.lr_scheduler_g = self.configs.g_scheduler.construct(optimizer=self.optimizer_g)
+        self.lr_scheduler_d = self.configs.d_scheduler.construct(optimizer=self.optimizer_d)
+        # Update checkpoint with the new optimizers
+        self.checkpoint.optimizer_generator = self.optimizer_g
+        self.checkpoint.optimizer_discriminator = self.optimizer_d
+        # Declare the model as constructed
+        self.is_model_constructed = True
 
     def save_checkpoint(self):
         self.checkpoint.save(step=self.step)
@@ -118,11 +137,13 @@ class Trainer:
     def resume_checkpoint(self, path: str):
         self.step = self.checkpoint.load(path, should_resume_config=True)
 
-    def before_training(self):
+    def before_training(self, data: Dataset):
+        self.construct_model(data)
         self.model.generator.to(self.device)
         self.model.discriminator.to(self.device)
 
-    def before_evaluate(self):
+    def before_evaluate(self, data: Dataset):
+        self.construct_model(data)
         self.model.generator.to(self.device)
         self.model.discriminator.to(self.device)
 
@@ -136,6 +157,14 @@ class Trainer:
         return self.model.generate_images(self.fixed_z.to(self.device))
 
     @staticmethod
+    def load_dataset(configs: TrainerConfig, data: Optional[Dataset] = None, name: str = 'training'):
+        if data is None:
+            if not configs.dataset:
+                raise ValueError(f"No dataset provided for {name} and no dataset name in configs.")
+            data = dataset_loader(configs.dataset, configs.batch_size, configs.num_workers, configs.device, configs.dataset_dir)
+        return data
+
+    @staticmethod
     def infinite_dataloader(dataloader) -> Generator[tuple[torch.Tensor, torch.Tensor], None, None]:
         while True:
             for (imgs, labels) in dataloader:
@@ -143,8 +172,9 @@ class Trainer:
                     yield imgs, labels
                 # Discard the last batch if it is not a full batch
 
-    def train(self, data: Dataset):
-        self.before_training()
+    def train(self, data: Optional[Dataset] = None):
+        data = self.load_dataset(self.configs, data, 'training')
+        self.before_training(data)
         self.model.set_train()
 
         self.optimizer_g.zero_grad()
@@ -173,9 +203,6 @@ class Trainer:
                 for logger in self.loggers:
                     logger.log_image(step=step, image=generated_image_examples, prefix='train')
 
-            if step >= self.configs.steps_total:
-                break
-
             if step % self.configs.steps_checkpoint == 0 and step > 0:
                 print('Salvando checkpoint', self.step)
                 self.save_checkpoint()
@@ -188,6 +215,9 @@ class Trainer:
                 for logger in self.loggers:
                     eval_metrics = {f'eval_{k}': v for k, v in metrics.items()}
                     logger.log(step=step, metrics=eval_metrics)
+
+            if step >= self.configs.steps_total:
+                break
 
             # All logs are taken from the start step.
             self.step += self.configs.steps_per_batch
@@ -222,7 +252,7 @@ class Trainer:
         lr_d = self.optimizer_d.param_groups[0]['lr']
         it_s = imgs.size(0) / (time_end - time_start)
         metrics = {
-            'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr_g': lr_g, 'lr_d': lr_d, 'it/s': it_s
+            'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr_g': lr_g, 'lr_d': lr_d, 'its': it_s
         }
         return metrics
 
@@ -240,10 +270,15 @@ class Trainer:
 
             lr_scheduler.step(current_loss=loss.item())
 
-    def evaluate(self, data: Dataset) -> dict:
-        self.before_evaluate()
+    def evaluate(self, data: Optional[Dataset] = None) -> dict:
+        data = self.load_dataset(self.configs, data, 'evaluation')
+
+        self.before_evaluate(data)
         dataloader = data.train_dataloader()
         self.model.set_eval()
+
+        if self.device.type.startswith('cuda') and not self.device.type.endswith(':0'):
+            torch.cuda.set_device(self.device)
 
         metrics_value = compute_metrics(model=self.model, dataloader=dataloader, metrics=self.eval_metrics, config={
             'output_path': self.configs.output_path,

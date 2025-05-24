@@ -39,3 +39,13 @@ class Adam(Optimizer):
             fused=self.fused
         )
 
+    def __dict__(self):
+        return {
+            'name': self.name,
+            'lr': self.lr,
+            'betas': self.betas,
+            'eps': self.eps,
+            'weight_decay': self.weight_decay,
+            'ams_grad': self.ams_grad,
+            'fused': self.fused
+        }

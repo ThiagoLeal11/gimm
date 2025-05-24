@@ -1,10 +1,12 @@
 from abc import abstractmethod, ABC
+from typing import Sequence
 
 import torch
 from torch import Tensor
 from torch import nn
 
 
+Size = Sequence[int]
 ImageTensor = Tensor
 Loss = Tensor
 Logits = Tensor
@@ -13,6 +15,10 @@ Logits = Tensor
 class ModuleGAN(ABC, nn.Module):
     generator: nn.Module
     discriminator: nn.Module
+
+    @abstractmethod
+    def construct(self, in_features: Size) -> 'ModuleGAN':
+        return self
 
     def set_train(self):
         self.generator.train()

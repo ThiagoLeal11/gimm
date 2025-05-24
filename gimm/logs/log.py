@@ -23,7 +23,7 @@ class Logger(ABC):
         pass
 
     def should_log(self, step: int) -> bool:
-        return step - self.last_logged >= self.interval or step == 0
+        return step - self.last_logged >= self.interval or step == 0 or step == self.last_logged
 
     def log(self, step: int, metrics: dict[str, any]) -> None:
         if self.should_log(step):

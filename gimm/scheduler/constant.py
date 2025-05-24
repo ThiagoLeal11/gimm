@@ -15,3 +15,6 @@ class ConstantLR(Scheduler):
 
     def _compute_lr(self, t: int) -> list[float]:
         return self.lr
+
+    def __repr__(self):
+        return f"ConstantLR({self.lr})"

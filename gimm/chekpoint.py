@@ -39,7 +39,6 @@ class Checkpoint:
         if self.raise_if_dir_not_empty and any(pathlib.Path(self.checkpoint_dir).iterdir()):
             raise ValueError(f"Checkpoint directory {self.checkpoint_dir} is not empty and resume_checkpoint is not set.")
 
-
     def save(self, step: int):
         save_path = self.checkpoint_dir + self.checkpoint_prefix + f'{step:_}' + self.extension
         state = {

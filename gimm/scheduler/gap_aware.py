@@ -10,7 +10,7 @@ Papers:
 """
 
 
-from math import log
+from math import log10
 
 from gimm.scheduler.scheduler import Scheduler
 
@@ -72,7 +72,7 @@ class GapAwareLR(Scheduler):
         param_name: str = "lr",
         last_step: int = -1,
         updates_per_step: int = 1,
-        ideal_loss: float = log(4),
+        ideal_loss: float = log10(4),
         x_min: float = 0.1,
         x_max: float = 0.1,
         h_min: float = 0.1,
@@ -91,10 +91,11 @@ class GapAwareLR(Scheduler):
 
     def _compute_lr(self, t: int) -> list[float]:
         x = abs(self.current_loss - self.ideal_loss)
-        f_x = clip(self.f_max ** (x / self.x_max), 1.0, self.f_max)
-        h_x = clip(self.h_min ** (x / self.x_min), self.h_min, 1.0)
 
-        factor = f_x if self.current_loss > self.ideal_loss else h_x
+        if self.current_loss > self.ideal_loss:
+            factor = clip(self.f_max ** (x / self.x_max), 1.0, self.f_max)
+        else:
+            factor = clip(self.h_min ** (x / self.x_min), self.h_min, 1.0)
 
         return [
             lr * factor
@@ -106,7 +107,17 @@ class GapAwareLR(Scheduler):
             self.smoothed_loss = current_loss
 
         self.smoothed_loss = 0.95 * self.smoothed_loss + 0.05 * current_loss
-        return super().step(t, current_loss)
+        return super().step(t, self.smoothed_loss)
+
+    def __repr__(self):
+        return (
+            f"GapAwareLR("
+            f"ideal_loss={self.ideal_loss:.5}, "
+            f"x_min={self.x_min:.5}, "
+            f"x_max={self.x_max:.5}, "
+            f"h_min={self.h_min:.5}, "
+            f"f_max={self.f_max:.5})"
+        )
 
 
 def clip(x: float, lower: float, upper: float) -> float:
