@@ -6,6 +6,7 @@ import torch
 
 from gimm.chekpoint import Checkpoint
 from gimm.datasets.definition import Dataset
+from gimm.datasets.sampler import SmartSampler
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
 from gimm.logs.log import Logger, get_wandb_run_id, LoggerWandb
 from gimm.models.definition import ModuleGAN
@@ -164,14 +165,6 @@ class Trainer:
             data = dataset_loader(configs.dataset, configs.batch_size, configs.num_workers, configs.device, configs.dataset_dir)
         return data
 
-    @staticmethod
-    def infinite_dataloader(dataloader) -> Generator[tuple[torch.Tensor, torch.Tensor], None, None]:
-        while True:
-            for (imgs, labels) in dataloader:
-                if imgs.size(0) == dataloader.batch_size:
-                    yield imgs, labels
-                # Discard the last batch if it is not a full batch
-
     def train(self, data: Optional[Dataset] = None):
         data = self.load_dataset(self.configs, data, 'training')
         self.before_training(data)
@@ -183,14 +176,15 @@ class Trainer:
         step = self.step
         train_dataloader = data.train_dataloader()
 
-        for (imgs, labels) in self.infinite_dataloader(train_dataloader):
+        sampler = SmartSampler(train_dataloader, device=self.device, infinite=True, preload=True)
+        for (imgs, labels) in sampler:
             metrics = {}
             for accum_idx in range(self.configs.grad_accum_steps):
                 start_idx = accum_idx * self.configs.batch_size
                 end_idx = start_idx + self.configs.batch_size
 
                 # Execute the training step
-                batch = (imgs[start_idx:end_idx].to(self.device), labels[start_idx:end_idx].to(self.device))
+                batch = (imgs[start_idx:end_idx], labels[start_idx:end_idx])
                 metrics = self.training_step(accum_idx, batch)
 
             if step % self.configs.steps_log == 0:
