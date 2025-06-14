@@ -155,20 +155,31 @@ class Trainer:
         self.save_checkpoint()
 
     def get_image_examples(self):
-        return self.model.generate_images(self.fixed_z.to(self.device))
+        bs = self.configs.batch_size
+        zs = self.fixed_z.to(self.device)
+        generated_images: list[torch.Tensor] = []
+
+        with torch.no_grad():
+            for i in range(0, zs.size(0), bs):
+                z_batch = zs[i:i + bs]
+                imgs = self.model(z_batch)
+                generated_images.append(imgs)
+
+        return torch.cat(generated_images, dim=0)
 
     @staticmethod
     def load_dataset(configs: TrainerConfig, data: Optional[Dataset] = None, name: str = 'training'):
         if data is None:
             if not configs.dataset:
                 raise ValueError(f"No dataset provided for {name} and no dataset name in configs.")
-            data = dataset_loader(configs.dataset, configs.batch_size, configs.num_workers, configs.device, configs.dataset_dir)
+            bs = configs.batch_size * configs.grad_accum_steps
+            data = dataset_loader(configs.dataset, bs, configs.num_workers, configs.device, configs.dataset_dir)
         return data
 
     def train(self, data: Optional[Dataset] = None):
         data = self.load_dataset(self.configs, data, 'training')
         self.before_training(data)
-        self.model.set_train()
+        self.model.train()
 
         self.optimizer_g.zero_grad()
         self.optimizer_d.zero_grad()
@@ -192,7 +203,7 @@ class Trainer:
                     train_metrics = {f'train_{k}': v for k, v in metrics.items()}
                     logger.log(step=step, metrics=train_metrics)
 
-            if step % self.configs.steps_image == 0:
+            if step % self.configs.steps_image == 0 and step > 0:
                 generated_image_examples = self.get_image_examples()
                 for logger in self.loggers:
                     logger.log_image(step=step, image=generated_image_examples, prefix='train')
@@ -202,9 +213,9 @@ class Trainer:
                 self.save_checkpoint()
 
             if step % self.configs.steps_eval == 0 and step > 0:
-                self.model.set_eval()
+                self.model.eval()
                 metrics = self.evaluate(data)
-                self.model.set_train()
+                self.model.train()
 
                 for logger in self.loggers:
                     eval_metrics = {f'eval_{k}': v for k, v in metrics.items()}
@@ -230,14 +241,15 @@ class Trainer:
         # train generator
         # fake_imgs = None
         # if accum_idx < accum_steps * self.configs.g_updates_per_step:
-        g_loss, fake_imgs = self.model.generator_loss(imgs)
+        g_loss, fake_imgs = self.model.compute_generator_loss(imgs)
         self.backward(g_loss, self.lr_scheduler_g, self.optimizer_g, should_step=is_last_accum_batch)
 
         # train discriminator
         # if accum_idx < accum_steps * self.configs.d_updates_per_step:
         #     if not fake_imgs:
         #         fake_imgs = self.model.generate_images(imgs)
-        d_loss = self.model.discriminator_loss(imgs, fake_imgs)
+        # TODO: make it return a list so its more memory efficient (item_1.backward() and item_2.backward(), etc)
+        d_loss = self.model.compute_discriminator_loss(imgs, fake_imgs)
         self.backward(d_loss, self.lr_scheduler_d, self.optimizer_d, should_step=is_last_accum_batch)
 
         time_end = time.time()
@@ -269,7 +281,7 @@ class Trainer:
 
         self.before_evaluate(data)
         dataloader = data.train_dataloader()
-        self.model.set_eval()
+        self.model.eval()
 
         if self.device.type.startswith('cuda') and not self.device.type.endswith(':0'):
             torch.cuda.set_device(self.device)
