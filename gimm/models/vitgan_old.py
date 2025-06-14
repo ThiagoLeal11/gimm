@@ -9,9 +9,6 @@ Papers:
     VITGAN: Training GANs with Vision Transformers - https://arxiv.org/pdf/2107.04589v1.pdf
 """
 
-from cgi import dolog
-from typing import final
-
 import einops
 import einops.layers.torch as einops_layers
 import numpy as np
@@ -22,7 +19,7 @@ from torch import nn, Tensor
 
 from gimm.data.diff_augment import diff_augment_policy
 from gimm.layers.norm_spectral import SpectralNorm
-from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits
+from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits, Size
 
 
 # --------------------------------
@@ -505,8 +502,8 @@ class ModulatedLinear(nn.Module):
         weight = weight.view(batch_size * self.out_channels, self.in_channels, 1)
 
         img_size = input.size(1)
-        input = input.reshape(1, batch_size * self.in_channels, img_size)
-        out = F.conv1d(input, weight, groups=batch_size)
+        input2 = input.reshape(1, batch_size * self.in_channels, img_size)
+        out = F.conv1d(input2, weight, groups=batch_size)
         out = out.view(batch_size, img_size, self.out_channels)
 
         return out
@@ -929,6 +926,9 @@ class VitGAN(ModuleGAN):
 
         self.criterion = nn.BCEWithLogitsLoss()
 
+    def construct(self, in_features: Size) -> 'VitGAN':
+        return self
+
     def forward(self, z):
         return self.generator(z)
 
@@ -937,14 +937,14 @@ class VitGAN(ModuleGAN):
             np.random.normal(0, 1, (batch_size, self.latent_dim))
         )
 
-    def generate_images(self, x: Tensor) -> ImageTensor:
+    def generate_random_images(self, x: Tensor) -> ImageTensor:
         z = self.get_latent(x.shape[0]).type_as(x)
         fake_imgs = self.generator(z)
         return fake_imgs.reshape(
             -1, self.image_size, self.image_size, self.out_features,
         ).permute(0, 3, 1, 2)
 
-    def loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
+    def compute_loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
         logits = self.discriminator(imgs, do_augment=True)
         return self.criterion(logits, labels), logits
 
@@ -954,9 +954,9 @@ class VitGAN(ModuleGAN):
             self.discriminator(imgs, do_augment=False),
         )
 
-    def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
-        fake_imgs = self.generate_images(imgs)
-        g_loss, _ = self.real_loss(fake_imgs)
+    def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+        fake_imgs = self.generate_random_images(imgs)
+        g_loss, _ = self.loss_to_real(fake_imgs)
         g_loss_diversity = 0
 
         # TODO: extract
@@ -967,17 +967,17 @@ class VitGAN(ModuleGAN):
         final_loss = g_loss + g_loss_diversity * Lambda_diversity_penalty
         return final_loss, fake_imgs.detach()
 
-    def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
-        real_loss, real_logits = self.real_loss(imgs)
+    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+        real_loss, real_logits = self.loss_to_real(imgs)
         real_bcr_loss = self.bcr_loss(real_logits, imgs)
 
         fake_imgs = fake_imgs.detach()
-        fake_loss, fake_logits = self.fake_loss(fake_imgs)
+        fake_loss, fake_logits = self.loss_to_fake(fake_imgs)
         fake_bcr_loss = self.bcr_loss(fake_logits, fake_imgs)
 
         # TODO: extract
         Lambda_noise_loss = 0
-        noise_loss, _ = self.fake_loss(
+        noise_loss, _ = self.loss_to_fake(
             torch.FloatTensor(np.random.rand(*fake_imgs.shape) * 2 - 1).type_as(imgs),
         )
 
