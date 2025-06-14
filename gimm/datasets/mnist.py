@@ -12,12 +12,10 @@ class DatasetMNIST(Dataset):
         self.dims = (1, 28, 28)
         self.num_classes = 10
 
-        self.transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize((0.5,), (0.5,)),
-            ]
-        )
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,)),
+        ])
 
     def prepare_data(self):
         MNIST(self.data_dir, train=True, download=True)

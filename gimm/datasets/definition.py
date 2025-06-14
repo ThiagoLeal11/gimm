@@ -13,7 +13,10 @@ class Dataset(ABC):
         num_workers: int = 1,
         data_dir: str = ".",
         shuffle: bool = True,
-        pin_memory_device: torch.device = None
+        pin_memory_device: torch.device = 'cpu',
+            # TODO: permitir que isso seja uma configuração
+            # TODO: remover pin_memory
+        # transform: transforms.Compose = transforms.Compose([transforms.ToTensor()])
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -52,7 +55,9 @@ class Dataset(ABC):
             shuffle=self.shuffle,
             pin_memory=bool(self.pin_memory_device),
             pin_memory_device=self.pin_memory_device,
-
+            # TODO: Validar se essa é mesmo a melhor configuração.
+            prefetch_factor=1,
+            persistent_workers=True,
         )
 
     def val_dataloader(self):
