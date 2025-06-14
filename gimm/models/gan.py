@@ -90,22 +90,22 @@ class GAN(ModuleGAN):
     def get_latent(self, batch_size: int) -> Tensor:
         return torch.randn(batch_size, self.latent_dim)
 
-    def generate_images(self, x: Tensor) -> ImageTensor:
+    def generate_random_images(self, x: Tensor) -> ImageTensor:
         z = self.get_latent(x.shape[0]).type_as(x)
         return self.forward(z)
 
-    def loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
+    def compute_loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
         logits = self.discriminator(imgs)
         return bce(logits, labels), logits
 
-    def generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
-        fake_imgs = self.generate_images(imgs)
-        g_loss, _ = self.real_loss(fake_imgs)
+    def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+        fake_imgs = self.generate_random_images(imgs)
+        g_loss, _ = self.loss_to_real(fake_imgs)
         return g_loss, fake_imgs.detach()
 
-    def discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
-        real_loss, _ = self.real_loss(imgs)
-        fake_loss, _ = self.fake_loss(fake_imgs.detach())
+    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+        real_loss, _ = self.loss_to_real(imgs)
+        fake_loss, _ = self.loss_to_fake(fake_imgs.detach())
         return real_loss + fake_loss
 
 def bce(y_hat: Tensor, y: Tensor) -> Tensor:
