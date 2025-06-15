@@ -73,7 +73,7 @@ class SmartSampler:
             # Ensures the producer thread finishes
             # Even if the consumer is interrupted (e.g., by an external exception or break)
             if producer_thread.is_alive():
-                 # # Attempt to empty the queue to unblock the producer thread if it is stuck in put()
+                # Attempt to empty the queue to unblock the producer thread if it is stuck in put()
                 while not batch_queue.empty():
                     try:
                         batch_queue.get_nowait()

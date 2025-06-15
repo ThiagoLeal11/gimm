@@ -5,9 +5,9 @@ import zipfile
 from typing import Literal, List
 
 import requests
-from PIL import Image
 from torch.utils.data import Dataset as TorchDataset
 from torchvision import transforms
+from torchvision.io import decode_image
 
 from gimm.datasets.definition import Dataset
 
@@ -17,9 +17,8 @@ class DatasetPistachio1(Dataset):
         self.dims = (3, 32, 32)
         self.num_classes = 1
 
-        self.transform = transforms.Compose(
+        self.transformations = transforms.Compose(
             [
-                transforms.ToTensor(),
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                 transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR),
             ]
@@ -51,8 +50,8 @@ class DatasetPistachio1(Dataset):
         if not train_image_paths and not test_image_paths:
             raise FileNotFoundError(f"No valid images found in {image_folder_path}. Please check the dataset structure.")
 
-        self.dataset_train = PistachioImageDataset(image_paths=train_image_paths, transform=self.transform)
-        self.dataset_test = PistachioImageDataset(image_paths=test_image_paths, transform=self.transform)
+        self.dataset_train = PistachioImageDataset(image_paths=train_image_paths, transform=self.transformations)
+        self.dataset_test = PistachioImageDataset(image_paths=test_image_paths, transform=self.transformations)
 
 
 def _PISTACHIO_1(path: str, download: bool = True):
@@ -140,7 +139,7 @@ class PistachioImageDataset(TorchDataset):
     def __getitem__(self, idx):
         img_path = self.image_paths[idx]
         try:
-            image = Image.open(img_path).convert("RGB") # Garante que seja RGB
+            image = decode_image(img_path).float() / 255.0
         except FileNotFoundError:
             raise FileNotFoundError(f"Arquivo de imagem não encontrado: {img_path}")
         except Exception as e:
