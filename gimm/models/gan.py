@@ -73,16 +73,11 @@ class GAN(ModuleGAN):
     def __init__(self, in_features: Optional[Size] = None, latent_dim: int = 100):
         super().__init__()
 
-        self.in_features = in_features
+        if not in_features:
+            in_features = (3, 32, 32)
         self.latent_dim = latent_dim
-
-    def construct(self, in_features: Size) -> 'GAN':
-        in_features = in_features or self.in_features
-        assert in_features is not None, "in_features must be provided"
-
         self.generator = Generator(self.latent_dim, in_features)
         self.discriminator = Discriminator(in_features)
-        return self
 
     def forward(self, z):
         return self.generator(z)

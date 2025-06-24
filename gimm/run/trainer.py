@@ -1,8 +1,10 @@
 import time
+import warnings
 from dataclasses import dataclass
-from typing import Optional, Generator
+from typing import Optional, Literal, Sequence
 
 import torch
+from torchvision import transforms
 
 from gimm.chekpoint import Checkpoint
 from gimm.datasets.definition import Dataset
@@ -13,6 +15,11 @@ from gimm.models.definition import ModuleGAN
 from gimm.run.loader import dataset_loader
 from gimm.run.optimizer import Optimizer
 from gimm.scheduler.scheduler import Scheduler
+
+
+def custom_format_warning(message, category, filename, lineno, line=None):
+    return f"{filename}:{lineno}: {category.__name__}: {message}\n"
+warnings.formatwarning = custom_format_warning
 
 
 @dataclass
@@ -53,6 +60,8 @@ class TrainerConfig:
     # Useful for distribute default configs for the model training
     dataset: Optional[str] = None
     dataset_dir: Optional[str] = '.'
+    # 'auto': warns on rescaling; 'strict': error if resolution differs; 'silent': rescale without warning.
+    dataset_scale_policy: Literal['auto', 'strict', 'silent'] = 'auto'
 
     device: Optional[torch.device] = None
 
@@ -79,10 +88,10 @@ class Trainer:
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
-        self.optimizer_g: torch.optim.Optimizer = None
-        self.optimizer_d: torch.optim.Optimizer = None
-        self.lr_scheduler_g: Scheduler = None
-        self.lr_scheduler_d: Scheduler = None
+        self.optimizer_g = self.configs.g_optimizer.construct(self.model.generator.parameters())
+        self.optimizer_d = self.configs.d_optimizer.construct(self.model.discriminator.parameters())
+        self.lr_scheduler_g = self.configs.g_scheduler.construct(optimizer=self.optimizer_g)
+        self.lr_scheduler_d = self.configs.d_scheduler.construct(optimizer=self.optimizer_d)
 
         self.checkpoint = Checkpoint(
             configs=configs.__dict__,
@@ -104,7 +113,7 @@ class Trainer:
             args = self.checkpoint.args
             self.fixed_z = args['fixed_z']
 
-            # Set the wandb resume id if a wandb logger is present
+            # Set the wandb resume_id if a wandb logger is present
             wandb_logger = next((logger for logger in self.loggers if isinstance(logger, LoggerWandb)), None)
             if wandb_logger:
                 wandb_logger.set_resume(args['wandb_run_id'])
@@ -114,23 +123,6 @@ class Trainer:
             logger.start()
 
         self.eval_metrics = eval_metrics
-        self.is_model_constructed = False
-
-    def construct_model(self, data: Dataset):
-        if self.is_model_constructed:
-            return
-
-        # Construct the model with the input dimensions given by the dataset
-        self.model.construct(in_features=data.dims)
-        self.optimizer_g = self.configs.g_optimizer.construct(self.model.generator.parameters())
-        self.optimizer_d = self.configs.d_optimizer.construct(self.model.discriminator.parameters())
-        self.lr_scheduler_g = self.configs.g_scheduler.construct(optimizer=self.optimizer_g)
-        self.lr_scheduler_d = self.configs.d_scheduler.construct(optimizer=self.optimizer_d)
-        # Update checkpoint with the new optimizers
-        self.checkpoint.optimizer_generator = self.optimizer_g
-        self.checkpoint.optimizer_discriminator = self.optimizer_d
-        # Declare the model as constructed
-        self.is_model_constructed = True
 
     def save_checkpoint(self):
         self.checkpoint.save(step=self.step)
@@ -139,20 +131,43 @@ class Trainer:
         self.step = self.checkpoint.load(path, should_resume_config=True)
 
     def before_training(self, data: Dataset):
-        self.construct_model(data)
-        self.model.generator.to(self.device)
-        self.model.discriminator.to(self.device)
+        self.model.to(self.device)
 
     def before_evaluate(self, data: Dataset):
-        self.construct_model(data)
-        self.model.generator.to(self.device)
-        self.model.discriminator.to(self.device)
+        self.model.to(self.device)
 
     def after_evaluate(self):
         pass
 
     def after_training(self):
         self.save_checkpoint()
+
+    @staticmethod
+    def scale_dataset_to_model(dataset: Dataset, model_in_features: Sequence[int], scale_policy: Literal['auto', 'strict', 'silent'] = 'auto') -> Dataset:
+        orig_ch, orig_h, orig_w = dataset.dims
+        target_ch, target_h, target_w = model_in_features
+
+        if orig_ch != target_ch:
+            raise ValueError(f"Dataset channels ({orig_ch}) do not match model input features ({target_ch}).")
+
+        is_same_resolution = orig_h == target_h and orig_w == target_w
+        if is_same_resolution:
+            return dataset
+
+        if scale_policy == 'strict':
+            raise ValueError(f"Dataset dimensions ({orig_h}x{orig_w}) do not match model input features ({target_h}x{target_w}).")
+        elif scale_policy == 'auto':
+            message = f"Rescaling dataset from ({orig_h}x{orig_w}) to ({target_h}x{target_w})."
+            warnings.warn(message)
+
+        scale = max(target_h / orig_h, target_w / orig_w)
+        new_size = (int(orig_h * scale), int(orig_w * scale))
+
+        dataset.update_transformations([
+            transforms.Resize(new_size, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop((target_h, target_w))
+        ])
+        return dataset
 
     def get_image_examples(self):
         bs = self.configs.batch_size
@@ -167,17 +182,24 @@ class Trainer:
 
         return torch.cat(generated_images, dim=0)
 
-    @staticmethod
-    def load_dataset(configs: TrainerConfig, data: Optional[Dataset] = None, name: str = 'training'):
-        if data is None:
-            if not configs.dataset:
-                raise ValueError(f"No dataset provided for {name} and no dataset name in configs.")
-            bs = configs.batch_size * configs.grad_accum_steps
-            data = dataset_loader(configs.dataset, bs, configs.num_workers, configs.device, configs.dataset_dir)
-        return data
+    def load_dataset(self, data: Optional[Dataset] = None, name: str = Literal['training', 'evaluation']):
+        if data is not None:
+            assert isinstance(data, Dataset), f"Expected data to be a Dataset instance, got {type(data)}"
+            return data
+
+        cfg = self.configs
+        assert cfg.dataset, f"Dataset name must be provided in configs, got {cfg.dataset}"
+
+        dataset = dataset_loader(
+            name=cfg.dataset,
+            batch_size=cfg.batch_size * cfg.grad_accum_steps,
+            num_workers=cfg.num_workers,
+            data_dir=cfg.dataset_dir
+        )
+        return self.scale_dataset_to_model(dataset, self.model.in_features, cfg.dataset_scale_policy)
 
     def train(self, data: Optional[Dataset] = None):
-        data = self.load_dataset(self.configs, data, 'training')
+        data = self.load_dataset(data, 'training')
         self.before_training(data)
         self.model.train()
 
@@ -277,7 +299,7 @@ class Trainer:
             lr_scheduler.step(current_loss=loss.item())
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
-        data = self.load_dataset(self.configs, data, 'evaluation')
+        data = self.load_dataset(data, 'evaluation')
 
         self.before_evaluate(data)
         dataloader = data.train_dataloader()

@@ -15,10 +15,7 @@ Logits = Tensor
 class ModuleGAN(ABC, nn.Module):
     generator: nn.Module
     discriminator: nn.Module
-
-    @abstractmethod
-    def construct(self, in_features: Size) -> 'ModuleGAN':
-        return self
+    in_features: Size
 
     def forward(self, latent: Tensor) -> ImageTensor:
         return self.generator(latent)

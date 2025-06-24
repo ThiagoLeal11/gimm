@@ -64,14 +64,21 @@ class VitGAN(ModuleGAN):
         self.in_features = in_features
         self.criterion = torch.nn.BCELoss(reduction='mean')
 
-    # TODO: rename to load
-    def construct(self, in_features: Size) -> "ModuleGAN":
-        in_features = in_features or self.in_features
-        assert in_features is not None, "in_features must be provided"
+        if not in_features:
+            in_features = (3, 32, 32)
+        assert len(in_features) == 3, "in_features must be a list of 3 integers (channels, height, width)"
+        assert in_features[0] in [1, 3], "in_features[0] must be either 1 (grayscale) or 3 (RGB)"
+        assert in_features[1] == in_features[2], "in_features[1] and in_features[2] must be equal (height and width)"
+        channels, img_size = in_features[0], in_features[1]
 
+        model_config["generator_params"]["img_size"] = img_size
+        model_config["generator_params"]["n_channels"] = channels
+        model_config["discriminator_params"]["img_size"] = img_size
+        model_config["discriminator_params"]["n_channels"] = channels
+
+        self.in_features = in_features
         self.generator = Generator(**model_config["generator_params"])
         self.discriminator = Discriminator(**model_config["discriminator_params"])
-        return self
 
     def get_latent(self, batch_size: int) -> Tensor:
         return torch.randn(batch_size, model_config["lattent_space_size"])

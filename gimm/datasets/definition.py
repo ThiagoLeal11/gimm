@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Optional, Sequence
+from typing import Literal, Optional, Sequence, Callable
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,7 +21,7 @@ class Dataset(ABC):
         pin_memory_device: torch.device = 'cpu',
         persistent_workers: bool = True,
         # List of transformations to apply to the dataset, defaults to [ToTensor(), Normalize(0.5)]
-        transformations: Optional[list[v2.Compose]] = None,
+        transformations: Optional[Sequence[Callable]] = None,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -64,6 +64,18 @@ class Dataset(ABC):
     @abstractmethod
     def setup(self, stage: Literal["train", "test"]):
         pass
+
+    def update_transformations(self, transformations: Sequence[Callable]):
+        """
+        Update the transformations applied to the dataset.
+        This is useful if you want to change the transformations after the dataset has been initialized.
+        """
+        datasets_not_initialized = self.dataset_train is None and self.dataset_val is None and self.dataset_test is None
+        assert datasets_not_initialized, "Cannot update transformations after datasets have been initialized."
+        assert isinstance(transformations, list), "Transformations must be a list of torchvision.transforms.v2.Compose objects."
+        assert len(transformations) > 0, "Transformations list must not be empty."
+
+        self.transformations = v2.Compose(transformations + transformations)
 
     def train_dataloader(self):
         if self.dataset_train is None:

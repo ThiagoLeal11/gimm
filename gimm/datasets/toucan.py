@@ -28,19 +28,9 @@ class SingleImageDataset(TorchDataset):
 
 class DatasetToucan(Dataset):
     def definitions(self):
-        self.dims = (3, 32, 32)
+        self.dims = (3, 1024, 1024)
         self.num_classes = 1
         self.num_workers = 1
-
-        self.transformations = transforms.Compose(
-            [
-                transforms.Resize(
-                    32, interpolation=transforms.InterpolationMode.BILINEAR
-                ),
-                transforms.CenterCrop((32, 32)),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-            ]
-        )
 
     def prepare_data(self):
         pass  # No preparation needed for a single image dataset
