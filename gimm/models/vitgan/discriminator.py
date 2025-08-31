@@ -30,10 +30,22 @@ class Discriminator(nn.Module):
         self.transformer_params = {} if transformer_params is None else transformer_params
         self.mlp_params         = {} if mlp_params is None else mlp_params
 
+        # Set correct parameters for discriminator
         self.encoder_params['img_size'], self.encoder_params['n_channels'] = self.img_size, self.n_channels
+
+        # Use correct patch configuration like in notebook
+        if 'patch_size' not in self.encoder_params:
+            self.encoder_params['patch_size'] = 8  # 2x the generator patch size for overlap
+        if 'stride_size' not in self.encoder_params:
+            self.encoder_params['stride_size'] = 4  # Same as generator patch size
+
         self.patch_encoder = PatchEncoder(**self.encoder_params)
 
-        self.transformer_params['in_features'], self.transformer_params['spectral_scaling'], self.transformer_params['lp'] = self.patch_encoder.proj_output_size, True, 2
+        # Set discriminator parameters for transformer
+        self.transformer_params['in_features'] = self.patch_encoder.proj_output_size
+        self.transformer_params['spectral_scaling'] = True
+        self.transformer_params['lp'] = 2  # L2 distance for discriminator
+
         self.transformer_layers = nn.ModuleList([Transformer(**self.transformer_params) for _ in range(self.n_transformer_layers)])
 
         self.mlp_params['in_features'], self.mlp_params['out_features'] = self.transformer_layers[-1].in_features, self.output_size

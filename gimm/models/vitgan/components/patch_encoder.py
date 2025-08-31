@@ -1,63 +1,77 @@
 import torch
 import torch.nn as nn
+from einops.layers.torch import Rearrange
 
 
 class PatchEncoder(nn.Module):
-    def __init__(self, img_size, n_channels, patch_size=8, projection_ouput_size=None, overlap=2, dropout_rate=0.0, **kwargs):
+    def __init__(self, img_size, n_channels, patch_size=4, projection_ouput_size=None, overlap=0, dropout_rate=0.0, stride_size=None, **kwargs):
         """
         Encodes an image to a vector according to ViT process: patches, projection, cls token and positional embedding
+        Uses standard PyTorch modules (nn.Conv2d, nn.Flatten, nn.LayerNorm) instead of custom implementations
         :param img_size: input images size, the image must be square sized
         :param n_channels: number of channel in the input images
         :param patch_size: size of each patches, patches will be square sized
         :param projection_ouput_size: number of feature at the output of the projection
-        :param overlap: number of overlapping pixels for neighbouring patches
+        :param overlap: number of overlapping pixels for neighbouring patches (deprecated, use stride_size)
+        :param stride_size: stride for patch extraction
         :param dropout_rate: dropout rate at the final stage level
         """
         super(PatchEncoder, self).__init__()
 
-        self.patch_size       = patch_size
-        self.overlap          = overlap
+        self.patch_size = patch_size
+        self.img_size = img_size
+        self.stride_size = stride_size if stride_size is not None else patch_size
 
-        self.token_size = n_channels * (self.patch_size + 2 * self.overlap)**2
-        self.stride     = (img_size - self.patch_size - 2 * self.overlap) // self.patch_size + 1
-        self.n_token    = ((img_size - (self.patch_size + 2 * self.overlap-1) - 1) // self.stride + 1)**2
+        self.proj_output_size = projection_ouput_size if projection_ouput_size is not None else (n_channels * patch_size * patch_size)
 
-        self.proj_output_size = projection_ouput_size if projection_ouput_size is not None else self.token_size
-        self.projection_matrix = nn.Linear(self.token_size, self.proj_output_size, bias=False)
+        # Replace custom projection with standard PyTorch modules
+        self.patch_conv = nn.Conv2d(
+            n_channels, 
+            self.proj_output_size, 
+            kernel_size=patch_size, 
+            stride=self.stride_size, 
+            padding=0
+        )
+        
+        # Flatten spatial dimensions: (B, C, H, W) -> (B, C, H*W) -> (B, H*W, C)
+        self.flatten = nn.Flatten(start_dim=2)  # Flatten H and W dimensions
+        
+        self.layer_norm = nn.LayerNorm(self.proj_output_size)
+
         self.cls_token = nn.Parameter(torch.randn(1, 1, self.proj_output_size))
-        self.pos_embedding = nn.Parameter(torch.randn(self.n_token + 1, self.proj_output_size))
+
+        # Calculate the number of patches correctly
+        num_patches = ((img_size - patch_size + self.stride_size) // self.stride_size) ** 2 + 1
+        self.pos_embedding = nn.Parameter(torch.randn(num_patches, self.proj_output_size))
 
         self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self, imgs):
         assert len(imgs.shape) == 4, 'Expected input image tensor to be of shape BxCxHxW'
-        imgs_tokens = self._get_tokens(imgs)
-        imgs_tokens = self.projection_matrix(imgs_tokens)
-        cls_token = self.cls_token.expand(imgs_tokens.shape[0], 1, self.proj_output_size)
+        b, _, _, _ = imgs.shape
 
-        tokens = torch.cat((cls_token, imgs_tokens), dim=1)
-        emb_tokens = tokens + self.pos_embedding
-        emb_tokens = self.dropout(emb_tokens)
-        return emb_tokens
+        # Project to patches using standard Conv2d
+        x = self.patch_conv(imgs)  # Shape: (B, proj_output_size, H_patches, W_patches)
+        
+        # Flatten and transpose to get (B, num_patches, proj_output_size)
+        x = self.flatten(x)  # Shape: (B, proj_output_size, H_patches * W_patches)
+        x = x.transpose(1, 2)  # Shape: (B, H_patches * W_patches, proj_output_size)
+        
+        # Apply layer normalization
+        x = self.layer_norm(x)
 
-    def _get_tokens(self, imgs):
-        # To get the stride with overlap, we simulate a bigger patch, but accomodate only for a smaller one
-        assert imgs.shape[2] == imgs.shape[3], 'The provided images are not square shaped'
+        # Add cls token
+        cls_tokens = self.cls_token.expand(b, 1, self.proj_output_size)
+        x = torch.cat([cls_tokens, x], dim=1)
 
-        # Then we use the unfold method twice to get the batches with respect to both image dimension
-        imgs_patches = imgs.unfold(2, self.patch_size + 2 * self.overlap, self.stride).unfold(3, self.patch_size + 2 * self.overlap, self.stride)
+        # Add positional embedding with sine activation
+        x += torch.sin(self.pos_embedding)
 
-        # We reshape this 5d tensor according in a BxLxF shape: we flatten patch and channel, and flatten their 2d positionning too
-        # view as Batch size, n_batch_x * n_batch_y, channels * patch_h * patch_w
-        # print(imgs_patches.shape)
-        # TODO: make sure the data is rearranged correctly when dimensions are ambiguous (see example below)
-        imgs_patches = imgs_patches.contiguous()
-        seq_patches = imgs_patches.view(imgs_patches.shape[0], imgs_patches.shape[2]*imgs_patches.shape[3], imgs_patches.shape[1]*imgs_patches.shape[4]*imgs_patches.shape[5])
-        # print(seq_patches.shape)
-        return seq_patches
+        return self.dropout(x)
 
 
 if __name__ == '__main__':
-    fim = torch.randn(100, 3, 10, 10)
-    e = PatchEncoder(10, 3, 3, 5, 1)
-    e.forward(fim)
+    fim = torch.randn(100, 3, 32, 32)
+    e = PatchEncoder(32, 3, 8, 384, 0)
+    result = e.forward(fim)
+    print(result.shape)

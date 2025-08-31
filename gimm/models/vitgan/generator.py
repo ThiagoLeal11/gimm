@@ -32,10 +32,15 @@ class Generator(nn.Module):
         self.mapping_params        = {} if mapping_mlp_params is None else mapping_mlp_params
         self.transformer_params    = {} if transformer_params is None else transformer_params
 
-        self.mapping_params['in_features'], self.mapping_params['out_features'] = self.lattent_size, self.img_size*self.feature_hidden_size
+        # Patch size for generator (original implementation uses 4)
+        self.patch_size = 4
+        self.num_patches = (img_size // self.patch_size) ** 2
+
+        # map latent vector to concatenated patch embeddings
+        self.mapping_params['in_features'], self.mapping_params['out_features'] = self.lattent_size, self.num_patches * self.feature_hidden_size
         self.mapping_mlp = MLP(**self.mapping_params)
 
-        self.emb = torch.nn.Parameter(torch.randn(self.img_size, self.feature_hidden_size))
+        self.pos_emb = nn.Parameter(torch.randn(self.num_patches, self.feature_hidden_size))
 
         self.transformer_params['in_features'], self.transformer_params['spectral_scaling'], self.transformer_params['lp'] = self.feature_hidden_size, False, 1
         self.transformer_layers = nn.ModuleList([TransformerSLN(**self.transformer_params) for _ in range(self.n_transformer_layers)])
@@ -44,14 +49,18 @@ class Generator(nn.Module):
 
         self.output_net = nn.Sequential(
             SIREN(self.feature_hidden_size, output_hidden_dim, is_first=True),
-            SIREN(output_hidden_dim, self.n_channels*self.img_size, is_first=False)
+            # output per patch: n_channels * patch_size * patch_size
+            SIREN(output_hidden_dim, self.n_channels * self.patch_size * self.patch_size, is_first=False)
         )
 
         print(f'Generator model with {count_params(self)} parameters ready')
 
     def forward(self, x):
-        w = self.mapping_mlp(x).view(-1, self.img_size, self.feature_hidden_size)
-        h = self.emb
+        # reshape mapping output to [batch, num_patches, feature_hidden_size]
+        batch_size = x.shape[0]
+        w = self.mapping_mlp(x).view(batch_size, self.num_patches, self.feature_hidden_size)
+        # initialize positional embeddings and expand to batch size
+        h = self.pos_emb.unsqueeze(0).expand(batch_size, self.num_patches, self.feature_hidden_size)
         for tf in self.transformer_layers:
             w, h = tf(h, w)
         w = self.sln(h, w)

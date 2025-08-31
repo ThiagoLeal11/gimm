@@ -38,8 +38,8 @@ model_config = {
         "n_transformer_layers": 4,
         "output_size": 1,
         "encoder_params": {
-            "patch_size": 8,
-            "overlap": 2,
+            "patch_size": 8,  # 2x generator patch size for overlap
+            "stride_size": 4,  # Same as generator patch size
             "dropout_rate": 0.0,
         },
         "transformer_params": {
