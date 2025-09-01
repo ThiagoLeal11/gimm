@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 from gimm.models.utils import count_params
-from gimm.models.vitgan.components.patch_encoder import PatchEncoder
-from gimm.models.vitgan.components.transformer import Transformer
-from gimm.models.vitgan.components.mlp import MLP
+from gimm.models.xvitgan.components.patch_encoder import PatchEncoder
+from gimm.models.xvitgan.components.transformer import Transformer
+from gimm.models.xvitgan.components.mlp import MLP
 
 
 class Discriminator(nn.Module):

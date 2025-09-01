@@ -6,6 +6,8 @@ from torch import Tensor
 from gimm.models.definition import ModuleGAN, Loss, ImageTensor, Logits, Size
 from gimm.models.vitgan.discriminator import Discriminator
 from gimm.models.vitgan.generator import Generator
+from gimm.models.xvitgan.discriminator import Discriminator
+from gimm.models.xvitgan.generator import Generator
 
 model_config = {
     "batch_size": 128,

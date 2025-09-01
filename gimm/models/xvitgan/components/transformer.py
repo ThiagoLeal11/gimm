@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 
-from gimm.models.vitgan.components.attention import MultiHeadSelfAttention
-from gimm.models.vitgan.components.sln import SLN
-from gimm.models.vitgan.components.mlp import MLP
+from gimm.models.xvitgan.components.attention import MultiHeadSelfAttention
+from gimm.models.xvitgan.components.sln import SLN
+from gimm.models.xvitgan.components.mlp import MLP
+from .layers import *
 
 
 class Transformer(nn.Module):

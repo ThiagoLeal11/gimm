@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 
 from gimm.models.utils import count_params
-from gimm.models.vitgan.components.mlp import MLP
-from gimm.models.vitgan.components.transformer import TransformerSLN
-from gimm.models.vitgan.components.sln import SLN
-from gimm.models.vitgan.components.siren import SIREN
+from gimm.models.xvitgan.components.mlp import MLP
+from gimm.models.xvitgan.components.transformer import TransformerSLN
+from gimm.models.xvitgan.components.sln import SLN
+from gimm.models.xvitgan.components.siren import SIREN
 
 
 class Generator(nn.Module):
