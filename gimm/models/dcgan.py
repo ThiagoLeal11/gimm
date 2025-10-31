@@ -1,17 +1,24 @@
-""" Copied from https://github.com/torchgan/torchgan/blob/master/torchgan/models/dcgan.py """
+""" Copied from https://github.com/pytorch/examples/blob/main/dcgan/main.py """
 
 from math import ceil, log2
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-__all__ = ["DCGANGenerator", "DCGANDiscriminator"]
 
 from torch import Tensor
 from typing_extensions import Optional
 
 from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits, Size
+
+
+# custom weights initialization called on netG and netD
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find("Conv") != -1:
+        torch.nn.init.normal_(m.weight, 0.0, 0.02)
+    elif classname.find("BatchNorm") != -1:
+        torch.nn.init.normal_(m.weight, 1.0, 0.02)
+        torch.nn.init.zeros_(m.bias)
 
 
 class DCGANGenerator(nn.Module):
@@ -20,114 +27,45 @@ class DCGANGenerator(nn.Module):
     by Radford et. al. " <https://arxiv.org/abs/1511.06434>`_ paper
 
     Args:
-        encoding_dims (int, optional): Dimension of the encoding vector sampled from the noise prior.
-        out_size (int, optional): Height and width of the input image to be generated. Must be at
-            least 16 and should be an exact power of 2.
-        out_channels (int, optional): Number of channels in the output Tensor.
-        step_channels (int, optional): Number of channels in multiples of which the DCGAN steps up
+        latent_dim (int, optional): Dimension of the encoding vector sampled from the noise prior.
+        channels (int, optional): Number of channels in the output Tensor.
+        filters (int, optional): Number of channels in multiples of which the DCGAN steps up
             the convolutional features. The step up is done as dim :math:`z \rightarrow d \rightarrow
             2 \times d \rightarrow 4 \times d \rightarrow 8 \times d` where :math:`d` = step_channels.
-        batchnorm (bool, optional): If True, use batch normalization in the convolutional layers of
-            the generator.
-        nonlinearity (torch.nn.Module, optional): Nonlinearity to be used in the intermediate
-            convolutional layers. Defaults to ``LeakyReLU(0.2)`` when None is passed.
-        last_nonlinearity (torch.nn.Module, optional): Nonlinearity to be used in the final
-            convolutional layer. Defaults to ``Tanh()`` when None is passed.
-        label_type (str, optional): The type of labels expected by the Generator. The available
-            choices are 'none' if no label is needed, 'required' if the original labels are
-            needed and 'generated' if labels are to be sampled from a distribution.
     """
 
-    def __init__(self, encoding_dims=100, out_size=32, out_channels=3, step_channels=64, batchnorm=True,
-                 nonlinearity=None, last_nonlinearity=None, label_type="none", *args, **kwargs):
+    def __init__(self, latent_dim=100, channels=3, filters=64, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.encoding_dims = encoding_dims
-        self.label_type = label_type
-
-        if out_size < 16 or ceil(log2(out_size)) != log2(out_size):
-            raise Exception(
-                "Target Image Size must be at least 16*16 and an exact power of 2"
-            )
-        num_repeats = out_size.bit_length() - 4
-        self.ch = out_channels
-        self.n = step_channels
-        self.n = step_channels
-        use_bias = not batchnorm
-        nl = nn.LeakyReLU(0.2) if nonlinearity is None else nonlinearity
-        last_nl = nn.Tanh() if last_nonlinearity is None else last_nonlinearity
-        model = []
-        d = int(self.n * (2 ** num_repeats))
-        if batchnorm is True:
-            model.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(
-                        self.encoding_dims, d, 4, 1, 0, bias=use_bias
-                    ),
-                    nn.BatchNorm2d(d),
-                    nl,
-                )
-            )
-            for i in range(num_repeats):
-                model.append(
-                    nn.Sequential(
-                        nn.ConvTranspose2d(d, d // 2, 4, 2, 1, bias=use_bias),
-                        nn.BatchNorm2d(d // 2),
-                        nl,
-                    )
-                )
-                d = d // 2
-        else:
-            model.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(
-                        self.encoding_dims, d, 4, 1, 0, bias=use_bias
-                    ),
-                    nl,
-                )
-            )
-            for i in range(num_repeats):
-                model.append(
-                    nn.Sequential(
-                        nn.ConvTranspose2d(d, d // 2, 4, 2, 1, bias=use_bias),
-                        nl,
-                    )
-                )
-                d = d // 2
-
-        model.append(
-            nn.Sequential(
-                nn.ConvTranspose2d(d, self.ch, 4, 2, 1, bias=True), last_nl
-            )
+        nz = latent_dim
+        ngf = filters
+        nc = channels
+        self.main = nn.Sequential(
+            # input is Z, going into a convolution
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(ngf * 8),
+            nn.ReLU(True),
+            # state size. (ngf*8) x 4 x 4
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 4),
+            nn.ReLU(True),
+            # state size. (ngf*4) x 8 x 8
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 2),
+            nn.ReLU(True),
+            # state size. (ngf*2) x 16 x 16
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf),
+            nn.ReLU(True),
+            # state size. (ngf) x 32 x 32
+            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+            nn.Tanh(),
+            # state size. (nc) x 64 x 64
         )
-        self.model = nn.Sequential(*model)
-        self._weight_initializer()
+        self.main.apply(weights_init)
 
-    def _weight_initializer(self):
-        r"""Default weight initializer for all generator models.
-        Models that require custom weight initialization can override this method
-        """
-        for m in self.modules():
-            if isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1.0)
-                nn.init.constant_(m.bias, 0.0)
-
-    def forward(self, x, feature_matching=False):
-        r"""Calculates the output tensor on passing the encoding ``x`` through the Generator.
-
-        Args:
-            x (torch.Tensor): A 2D torch tensor of the encoding sampled from a probability
-                distribution.
-            feature_matching (bool, optional): Returns the activation from a predefined intermediate
-                layer.
-
-        Returns:
-            A 4D torch.Tensor of the generated image.
-        """
-        x = x.view(-1, x.size(1), 1, 1)
-        return self.model(x)
+    def forward(self, x):
+        return self.main(x)
 
 
 class DCGANDiscriminator(nn.Module):
@@ -136,102 +74,42 @@ class DCGANDiscriminator(nn.Module):
     by Radford et. al. " <https://arxiv.org/abs/1511.06434>`_ paper
 
     Args:
-        in_size (int, optional): Height and width of the input image to be evaluated. Must be at
-            least 16 and should be an exact power of 2.
-        in_channels (int, optional): Number of channels in the input Tensor.
-        step_channels (int, optional): Number of channels in multiples of which the DCGAN steps up
+        channels (int, optional): Number of channels in the input Tensor.
+        filters (int, optional): Number of channels in multiples of which the DCGAN steps up
             the convolutional features. The step up is done as dim :math:`z \rightarrow d \rightarrow
             2 \times d \rightarrow 4 \times d \rightarrow 8 \times d` where :math:`d` = step_channels.
-        batchnorm (bool, optional): If True, use batch normalization in the convolutional layers of
-            the generator.
-        nonlinearity (torch.nn.Module, optional): Nonlinearity to be used in the intermediate
-            convolutional layers. Defaults to ``LeakyReLU(0.2)`` when None is passed.
-        last_nonlinearity (torch.nn.Module, optional): Nonlinearity to be used in the final
-            convolutional layer. Defaults to ``Tanh()`` when None is passed.
-        label_type (str, optional): The type of labels expected by the Generator. The available
-            choices are 'none' if no label is needed, 'required' if the original labels are
-            needed and 'generated' if labels are to be sampled from a distribution.
     """
 
-    def __init__(self, in_size=32, in_channels=3, step_channels=64, batchnorm=True, nonlinearity=None,
-                 last_nonlinearity=None, label_type="none", *args, **kwargs):
-
+    def __init__(self, channels=3, filters=64, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.input_dims = in_channels
-        self.label_type = label_type
-
-        if in_size < 16 or ceil(log2(in_size)) != log2(in_size):
-            raise Exception(
-                "Input Image Size must be at least 16*16 and an exact power of 2"
-            )
-        num_repeats = in_size.bit_length() - 4
-        self.n = step_channels
-        use_bias = not batchnorm
-        nl = nn.LeakyReLU(0.2) if nonlinearity is None else nonlinearity
-        last_nl = (
-            nn.LeakyReLU(0.2)
-            if last_nonlinearity is None
-            else last_nonlinearity
+        nc = channels
+        ndf = filters
+        self.main = nn.Sequential(
+            # input is (nc) x 64 x 64
+            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf) x 32 x 32
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*2) x 16 x 16
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*4) x 8 x 8
+            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 8),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*8) x 4 x 4
+            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+            nn.Sigmoid(),
         )
-        d = self.n
-        model = [
-            nn.Sequential(
-                nn.Conv2d(self.input_dims, d, 4, 2, 1, bias=True), nl
-            )
-        ]
-        if batchnorm is True:
-            for i in range(num_repeats):
-                model.append(
-                    nn.Sequential(
-                        nn.Conv2d(d, d * 2, 4, 2, 1, bias=use_bias),
-                        nn.BatchNorm2d(d * 2),
-                        nl,
-                    )
-                )
-                d *= 2
-        else:
-            for i in range(num_repeats):
-                model.append(
-                    nn.Sequential(
-                        nn.Conv2d(d, d * 2, 4, 2, 1, bias=use_bias), nl
-                    )
-                )
-                d *= 2
-        self.disc = nn.Sequential(
-            nn.Conv2d(d, 1, 4, 1, 0, bias=use_bias), last_nl
-        )
-        self.model = nn.Sequential(*model)
-        self._weight_initializer()
+        self.main.apply(weights_init)
 
-    def _weight_initializer(self):
-        r"""Default weight initializer for all generator models.
-        Models that require custom weight initialization can override this method
-        """
-        for m in self.modules():
-            if isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1.0)
-                nn.init.constant_(m.bias, 0.0)
-
-    def forward(self, x, feature_matching=False):
-        r"""Calculates the output tensor on passing the imTage ``x`` through the Discriminator.
-
-        Args:
-            x (torch.Tensor): A 4D torch tensor of the image.
-            feature_matching (bool, optional): Returns the activation from a predefined intermediate
-                layer.
-
-        Returns:
-            A 1D torch.Tensor of the probability of each image being real.
-        """
-        x = self.model(x)
-        if feature_matching is True:
-            return x
-        else:
-            x = self.disc(x)
-            return x.view(x.size(0))
+    def forward(self, x):
+        output = self.main(x)
+        return output.view(-1, 1).squeeze(1)
 
 
 class DCGAN(ModuleGAN):
@@ -239,7 +117,7 @@ class DCGAN(ModuleGAN):
         super().__init__()
 
         if not in_features:
-            in_features = (3, 32, 32)
+            in_features = (3, 64, 64)
 
         self.in_features = in_features
         self.latent_dim = latent_dim
@@ -249,22 +127,22 @@ class DCGAN(ModuleGAN):
         assert in_features[1] == in_features[2], "in_features[1] and in_features[2] must be equal (height and width)"
         channels, img_size = in_features[0], in_features[1]
 
-        self.generator = DCGANGenerator(encoding_dims=self.latent_dim, out_size=img_size, out_channels=channels)
-        self.discriminator = DCGANDiscriminator(in_size=img_size, in_channels=channels)
+        self.generator = DCGANGenerator(latent_dim=self.latent_dim, channels=channels)
+        self.discriminator = DCGANDiscriminator(channels=channels)
 
     def forward(self, z):
         return self.generator(z)
 
     def get_latent(self, batch_size: int) -> Tensor:
-        return torch.randn(batch_size, self.latent_dim)
+        return torch.randn(batch_size, self.latent_dim, 1, 1)
 
     def generate_random_images(self, x: Tensor) -> ImageTensor:
         z = self.get_latent(x.shape[0]).type_as(x)
         return self.forward(z)
 
     def compute_loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
-        logits = self.discriminator(imgs).reshape(-1, 1)
-        return bce(logits, labels), logits
+        logits = self.discriminator(imgs)
+        return torch.nn.functional.binary_cross_entropy(logits, labels), logits
 
     def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
         fake_imgs = self.generate_random_images(imgs)
@@ -275,6 +153,3 @@ class DCGAN(ModuleGAN):
         real_loss, _ = self.loss_to_real(imgs)
         fake_loss, _ = self.loss_to_fake(fake_imgs.detach())
         return real_loss + fake_loss
-
-def bce(y_hat: Tensor, y: Tensor) -> Tensor:
-    return torch.nn.functional.binary_cross_entropy_with_logits(y_hat, y)
