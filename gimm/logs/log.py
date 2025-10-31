@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 import torchvision
 import wandb
-from torch import tensor
+from torch import tensor, Tensor
 
 
 class Logger(ABC):
@@ -77,7 +77,11 @@ class LoggerCsvFile(Logger):
 
 class LoggerConsole(Logger):
     def _log(self, step: int, metrics: dict[str, any]) -> None:
-        print(f"Step {step}: {metrics}")
+        formated_metrics = {
+            k: (f"{v:.5f}".rstrip('0').rstrip('.') if isinstance(v, float) else v)
+            for k, v in metrics.items()
+        }
+        print(f"Step {step}: {formated_metrics}")
 
 
 class LoggerImageFile(Logger):
@@ -96,7 +100,7 @@ class LoggerImageFile(Logger):
         image_path = pathlib.Path(self.path) / prefix / f"step_{step}.{self.img_format}"
         image_path.parent.mkdir(parents=True, exist_ok=True)
 
-        torchvision.utils.save_image(image, image_path, format=self.img_format)
+        torchvision.utils.save_image(image, image_path, format=self.img_format, normalize=True)
 
 
 # TODO: Implement LoggerTQDM
@@ -141,8 +145,9 @@ class LoggerWandb(Logger):
     def _log(self, step: int, metrics: dict[str, any]) -> None:
         self.wandb.log(metrics, step=step)
 
-    def log_image(self, step: int, image: tensor, alt: str = None, prefix: str = None) -> None:
-        img = wandb.Image(image, caption=alt)
+    def log_image(self, step: int, image: Tensor, alt: str = None, prefix: str = None) -> None:
+        grid = torchvision.utils.make_grid(image, normalize=True)
+        img = wandb.Image(grid, caption=alt)
         self.wandb.log({f"{prefix}_image": img}, step=step)
 
     def get_run_id(self) -> str | None:
