@@ -47,6 +47,8 @@ class Dataset(ABC):
 
         if self.transformations is None:
             t = [
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
                 v2.Normalize((0.5,) * self.dims[0], (0.5,) * self.dims[0]),
             ]
             self.transformations = v2.Compose(t)
@@ -75,7 +77,7 @@ class Dataset(ABC):
         assert isinstance(transformations, list), "Transformations must be a list of torchvision.transforms.v2.Compose objects."
         assert len(transformations) > 0, "Transformations list must not be empty."
 
-        self.transformations = v2.Compose(transformations + transformations)
+        self.transformations = v2.Compose(transformations + self.transformations.transforms)
 
     def train_dataloader(self):
         if self.dataset_train is None:
