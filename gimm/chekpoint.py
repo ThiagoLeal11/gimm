@@ -1,10 +1,8 @@
 import pathlib
-from dataclasses import dataclass
 
 import torch
 
 from gimm.models.definition import ModuleGAN
-
 
 
 # TODO: Implement model_ema save
@@ -20,6 +18,7 @@ class Checkpoint:
         checkpoint_dir: str = '',
         max_keep: int = 10,
         raise_if_dir_not_empty: bool = True,
+        clean_checkpoint_dir: bool = False,
     ):
         self.model = model
         self.optimizer_generator = optimizer_generator
@@ -32,8 +31,12 @@ class Checkpoint:
         self.extension = '.pth.tar'
         self.raise_if_dir_not_empty = raise_if_dir_not_empty
 
-        # Create checkpoint directory
+        # Create a checkpoint directory
         pathlib.Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+        # Clean Checkpoint Directory
+        if clean_checkpoint_dir:
+            clean_dir_deep(pathlib.Path(self.checkpoint_dir))
 
         # Ensure the checkpoint directory is empty if not resuming from a checkpoint
         if self.raise_if_dir_not_empty and any(pathlib.Path(self.checkpoint_dir).iterdir()):
@@ -83,7 +86,6 @@ class Checkpoint:
         return checkpoint['step']
 
 
-
 def unwrap_model(model):
     # if isinstance(model, ModelEma):
     #     return unwrap_model(model.ema)
@@ -94,3 +96,11 @@ def unwrap_model(model):
         return unwrap_model(model._orig_mod)
 
     return model
+
+
+def clean_dir_deep(path: pathlib.Path):
+    for path in path.iterdir():
+        if path.is_dir():
+            clean_dir_deep(path)
+        else:
+            path.unlink()
