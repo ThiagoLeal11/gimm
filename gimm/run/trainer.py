@@ -1,3 +1,4 @@
+import pathlib
 import time
 import warnings
 from dataclasses import dataclass
@@ -5,8 +6,9 @@ from typing import Optional, Literal, Sequence
 
 import torch
 from torchvision import transforms
+import torch.backends.cudnn as cudnn
 
-from gimm.chekpoint import Checkpoint
+from gimm.chekpoint import Checkpoint, clean_dir_deep
 from gimm.datasets.definition import Dataset
 from gimm.datasets.sampler import SmartSampler
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
@@ -25,6 +27,7 @@ warnings.formatwarning = custom_format_warning
 @dataclass
 class TrainerConfig:
     project: str = 'gimm'
+    group: str = 'default'
     num_workers: int = 6
 
     batch_size: int = 128
@@ -56,6 +59,7 @@ class TrainerConfig:
     # Checkpoint
     output_path: str = "output"
     resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000.pth.tar'
+    delete_checkpoint: bool = False
 
     # Useful for distribute default configs for the model training
     dataset: Optional[str] = None
@@ -103,7 +107,8 @@ class Trainer:
             optimizer_generator=self.optimizer_g,
             optimizer_discriminator=self.optimizer_d,
             checkpoint_dir=configs.output_path + '/checkpoints/',
-            raise_if_dir_not_empty=not configs.resume_checkpoint
+            raise_if_dir_not_empty=not configs.resume_checkpoint,
+            clean_checkpoint_dir=configs.delete_checkpoint,
         )
 
         if configs.resume_checkpoint:
@@ -123,6 +128,9 @@ class Trainer:
             logger.start()
 
         self.eval_metrics = eval_metrics
+
+        # Cleans evaluation cache from other runs
+        clean_dir_deep(pathlib.Path(self.configs.output_path) / 'cache' / 'fidelity_cache')
 
     def save_checkpoint(self):
         self.checkpoint.save(step=self.step)
@@ -230,6 +238,11 @@ class Trainer:
                 for logger in self.loggers:
                     logger.log_image(step=step, image=generated_image_examples, prefix='train')
 
+            if step == 0:
+                for logger in self.loggers:
+                    real_images = imgs[:self.configs.images_to_log]
+                    logger.log_image(step=step, image=real_images, prefix='real')
+
             if step % self.configs.steps_checkpoint == 0 and step > 0:
                 print('Salvando checkpoint', self.step)
                 self.save_checkpoint()
@@ -311,7 +324,7 @@ class Trainer:
         metrics_value = compute_metrics(model=self.model, dataloader=dataloader, metrics=self.eval_metrics, config={
             'output_path': self.configs.output_path,
             'experiment': self.configs.project,
-            'samples': 50_000,
+            'samples': 20_000,
             'batch_size': self.configs.batch_size,
             'device': self.device,
             'verbose': True,
