@@ -99,6 +99,9 @@ def unwrap_model(model):
 
 
 def clean_dir_deep(path: pathlib.Path):
+    if not path.exists():
+        return
+
     for path in path.iterdir():
         if path.is_dir():
             clean_dir_deep(path)
