@@ -197,7 +197,7 @@ class Trainer:
 
         return torch.cat(generated_images, dim=0)
 
-    def load_dataset(self, data: Optional[Dataset] = None, name: str = Literal['training', 'evaluation']):
+    def load_dataset(self, data: Optional[Dataset] = None):
         if data is not None:
             assert isinstance(data, Dataset), f"Expected data to be a Dataset instance, got {type(data)}"
             return data
@@ -214,7 +214,7 @@ class Trainer:
         return self.scale_dataset_to_model(dataset, self.model.in_features, cfg.dataset_scale_policy)
 
     def train(self, data: Optional[Dataset] = None):
-        data = self.load_dataset(data, 'training')
+        data = self.load_dataset(data)
         self.before_training(data)
         self.model.train()
 
@@ -348,7 +348,7 @@ class Trainer:
 
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
-        data = self.load_dataset(data, 'evaluation')
+        data = self.load_dataset(data)
 
         self.before_evaluate(data)
         dataloader = data.train_dataloader()
