@@ -1,5 +1,5 @@
 from abc import abstractmethod, ABC
-from typing import Sequence
+from typing import Sequence, Optional
 
 import torch
 from torch import Tensor
@@ -7,7 +7,7 @@ from torch import nn
 
 
 Size = Sequence[int]
-ImageTensor = Tensor
+SampleTensor = Tensor
 Loss = Tensor
 Logits = Tensor
 
@@ -17,20 +17,28 @@ class ModuleGAN(ABC, nn.Module):
     discriminator: nn.Module
     in_features: Size
 
-    def forward(self, latent: Tensor) -> ImageTensor:
-        return self.generator(latent)
+    current_step: int
+    _cached_generation: Optional[SampleTensor]
 
-    def generate(self, latent: Tensor) -> ImageTensor:
+    def __init__(self):
+        super(ModuleGAN, self).__init__()
+        self.current_step = 0
+        self._cached_generation = None
+
+    def forward(self, latent: Tensor) -> SampleTensor:
+        return self.generate(latent)
+
+    def generate(self, latent: Tensor) -> SampleTensor:
         """
         Generate a batch of images from a latent vector
         """
         return self.generator(latent)
 
-    def discriminate(self, imgs: ImageTensor) -> Logits:
+    def discriminate(self, samples: SampleTensor) -> Logits:
         """
         Discriminate a batch of images
         """
-        return self.discriminator(imgs)
+        return self.discriminator(samples)
 
     @abstractmethod
     def get_latent(self, batch_size: int) -> Tensor:
@@ -39,12 +47,14 @@ class ModuleGAN(ABC, nn.Module):
         """
         pass
 
-    @abstractmethod
-    def generate_random_images(self, batch_size: Tensor) -> ImageTensor:
+    def generate_random_samples(self, samples: Tensor) -> SampleTensor:
         """
         Generate a batch of images from a latent vector
         """
-        pass
+        latent = self.get_latent(samples.shape[0]).type_as(samples)
+        output = self.forward(latent)
+        self._cached_generation = output.detach()
+        return output
 
     @abstractmethod
     def compute_loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
@@ -80,6 +90,18 @@ class ModuleGAN(ABC, nn.Module):
         Remember to detach the generated images from the graph.
         """
         pass
+
+    def get_previous_generated_samples(self, imgs: Tensor) -> SampleTensor:
+        """
+        Returns the previous generated images from generator or generates new ones.
+        """
+        # Cache miss
+        if self._cached_generation is None:
+            return self.generate_random_samples(imgs).detach()
+
+        output = self._cached_generation
+        self._cached_generation = None
+        return output
 
     def before_generator_step(self):
         """

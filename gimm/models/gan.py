@@ -85,7 +85,7 @@ class GAN(ModuleGAN):
     def get_latent(self, batch_size: int) -> Tensor:
         return torch.randn(batch_size, self.latent_dim)
 
-    def generate_random_images(self, x: Tensor) -> ImageTensor:
+    def generate_random_images(self, x: Tensor) -> SampleTensor:
         z = self.get_latent(x.shape[0]).type_as(x)
         return self.forward(z)
 

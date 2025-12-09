@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch import Tensor
 from typing_extensions import Optional
 
-from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits, Size
+from gimm.models.definition import ModuleGAN, Loss, Logits, Size
 
 
 # custom weights initialization called on netG and netD
@@ -130,26 +130,19 @@ class DCGAN(ModuleGAN):
         self.generator = DCGANGenerator(latent_dim=self.latent_dim, channels=channels)
         self.discriminator = DCGANDiscriminator(channels=channels)
 
-    def forward(self, z):
-        return self.generator(z)
-
     def get_latent(self, batch_size: int) -> Tensor:
         return torch.randn(batch_size, self.latent_dim, 1, 1)
-
-    def generate_random_images(self, x: Tensor) -> ImageTensor:
-        z = self.get_latent(x.shape[0]).type_as(x)
-        return self.forward(z)
 
     def compute_loss(self, imgs: Tensor, labels: Tensor) -> tuple[Loss, Logits]:
         logits = self.discriminator(imgs)
         return torch.nn.functional.binary_cross_entropy(logits, labels), logits
 
     def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
-        fake_imgs = self.generate_random_images(imgs)
+        fake_imgs = self.generate_random_samples(imgs)
         g_loss, _ = self.loss_to_real(fake_imgs)
         return g_loss, fake_imgs.detach()
 
     def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
         real_loss, _ = self.loss_to_real(imgs)
-        fake_loss, _ = self.loss_to_fake(fake_imgs.detach())
+        fake_loss, _ = self.loss_to_fake(fake_imgs)
         return real_loss + fake_loss

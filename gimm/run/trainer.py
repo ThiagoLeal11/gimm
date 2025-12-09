@@ -271,20 +271,17 @@ class Trainer:
 
         time_start = time.time()
 
-        # TODO: implement updates_per_step
+        # train discriminator
+        d_loss = None
+        if inner_step <= self.configs.d_updates_per_step:
+            fake_imgs = self.model.get_previous_generated_samples(imgs)
+            d_loss = self.model.compute_discriminator_loss(imgs, fake_imgs)
+            self.backward('d', d_loss, should_step=is_last_accum_batch)
 
         # train generator
-        # fake_imgs = None
-        # if accum_idx < accum_steps * self.configs.g_updates_per_step:
-        g_loss, fake_imgs = self.model.compute_generator_loss(imgs)
-
-        # train discriminator
-        # if accum_idx < accum_steps * self.configs.d_updates_per_step:
-        #     if not fake_imgs:
-        #         fake_imgs = self.model.generate_images(imgs)
-        # TODO: make it return a list so its more memory efficient (item_1.backward() and item_2.backward(), etc)
-        d_loss = self.model.compute_discriminator_loss(imgs, fake_imgs)
-            self.backward('d', d_loss, should_step=is_last_accum_batch)
+        g_loss = None
+        if inner_step <= self.configs.g_updates_per_step:
+            g_loss = self.model.compute_generator_loss(imgs)
             self.backward('g', g_loss, should_step=is_last_accum_batch)
 
         time_end = time.time()
@@ -315,13 +312,15 @@ class Trainer:
             optimizer.step()
             optimizer.zero_grad()
 
-            lr_scheduler.step(current_loss=loss.item())
             if module == 'g':
                 self.model.after_generator_step()
                 lr_scheduler = self.lr_scheduler_g
             else:
                 self.model.after_discriminator_step()
                 lr_scheduler = self.lr_scheduler_d
+
+            lr_scheduler.step(current_loss=compute_item(loss))
+
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
         data = self.load_dataset(data, 'evaluation')

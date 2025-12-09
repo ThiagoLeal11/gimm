@@ -51,7 +51,7 @@ class FidelityModelWrapper(GenerativeModelBase):
 
         batch_size = args[0].shape[0]
         latent = self.module.get_latent(batch_size).to(self.device)
-        fake_images = self.module.generate_random_images(latent)
+        fake_images = self.module.generate_random_samples(latent)
         quantized_images = _to_int8(fake_images)
         return quantized_images
 
