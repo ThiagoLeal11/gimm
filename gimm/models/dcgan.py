@@ -1,6 +1,5 @@
 """ Copied from https://github.com/pytorch/examples/blob/main/dcgan/main.py """
-
-from math import ceil, log2
+from typing import Sequence
 
 import torch
 import torch.nn as nn
@@ -137,12 +136,12 @@ class DCGAN(ModuleGAN):
         logits = self.discriminator(imgs)
         return torch.nn.functional.binary_cross_entropy(logits, labels), logits
 
-    def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+    def compute_generator_loss(self, imgs: Tensor) -> Sequence[Tensor] | Tensor:
         fake_imgs = self.generate_random_samples(imgs)
         g_loss, _ = self.loss_to_real(fake_imgs)
-        return g_loss, fake_imgs.detach()
+        return g_loss
 
-    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Sequence[Tensor] | Tensor:
         real_loss, _ = self.loss_to_real(imgs)
         fake_loss, _ = self.loss_to_fake(fake_imgs)
-        return real_loss + fake_loss
+        return real_loss, fake_loss

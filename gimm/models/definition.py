@@ -76,7 +76,7 @@ class ModuleGAN(ABC, nn.Module):
         )
 
     @abstractmethod
-    def compute_generator_loss(self, imgs: Tensor) -> tuple[Loss, ImageTensor]:
+    def compute_generator_loss(self, imgs: Tensor) -> Sequence[Loss] | Loss:
         """
         Returns the loss of the generator and the generated images.
         Remember that the images could not have been detached from the graph.
@@ -84,7 +84,7 @@ class ModuleGAN(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Loss:
+    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Sequence[Loss] | Loss:
         """
         Returns the loss of the discriminator
         Remember to detach the generated images from the graph.

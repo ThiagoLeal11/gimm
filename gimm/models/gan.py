@@ -8,13 +8,13 @@ GAN Implementation adapted from:
 Papers:
     Generative Adversarial Networks - https://arxiv.org/abs/1406.2661
 """
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
 from torch import nn, Tensor
 
-from gimm.models.definition import ModuleGAN, ImageTensor, Loss, Logits, Size
+from gimm.models.definition import ModuleGAN, SampleTensor, Loss, Logits, Size
 
 
 class Discriminator(nn.Module):
@@ -93,15 +93,15 @@ class GAN(ModuleGAN):
         logits = self.discriminator(imgs)
         return bce(logits, labels), logits
 
-    def compute_generator_loss(self, imgs: Tensor) -> tuple[Tensor, Tensor]:
+    def compute_generator_loss(self, imgs: Tensor) -> Sequence[Tensor] | Tensor:
         fake_imgs = self.generate_random_images(imgs)
         g_loss, _ = self.loss_to_real(fake_imgs)
-        return g_loss, fake_imgs.detach()
+        return g_loss
 
-    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Tensor:
+    def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Sequence[Tensor] | Tensor:
         real_loss, _ = self.loss_to_real(imgs)
         fake_loss, _ = self.loss_to_fake(fake_imgs.detach())
-        return real_loss + fake_loss
+        return real_loss, fake_loss
 
 def bce(y_hat: Tensor, y: Tensor) -> Tensor:
     return torch.nn.functional.binary_cross_entropy(y_hat, y)

@@ -312,7 +312,7 @@ class Trainer:
         lr_d = self.optimizer_d.param_groups[0]['lr']
         it_s = imgs.size(0) / (time_end - time_start)
         metrics = {
-            'g_loss': g_loss.item(), 'd_loss': d_loss.item(), 'lr_g': lr_g, 'lr_d': lr_d, 'its': it_s
+            'g_loss': compute_item(g_loss), 'd_loss': compute_item(d_loss), 'lr_g': lr_g, 'lr_d': lr_d, 'its': it_s
         }
         return metrics
 
@@ -321,7 +321,10 @@ class Trainer:
         if accum_steps > 1:
             loss /= accum_steps
 
-        loss.backward()
+        if isinstance(loss, torch.Tensor):
+            loss.backward()
+        else:
+            torch.autograd.backward(loss)
 
         if should_step:
             if module == 'g':
@@ -364,3 +367,11 @@ class Trainer:
         })
 
         return metrics_value
+
+
+def compute_item(tensors: Sequence[torch.Tensor] | torch.Tensor) -> int | float | bool | None:
+    if tensors is None:
+        return None
+    if isinstance(tensors, torch.Tensor):
+        return tensors.item()
+    return sum(t.item() for t in tensors)
