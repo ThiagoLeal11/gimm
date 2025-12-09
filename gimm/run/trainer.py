@@ -31,10 +31,11 @@ class TrainerConfig:
     num_workers: int = 6
 
     batch_size: int = 128
-    grad_accum_steps: int = 1  # (split batch into sub-batches due to GPU memory limitations)
+    # Split batch into sub-batches due to GPU memory limitations
+    grad_accum_steps: int = 1
 
-    # Number of updates per step for discriminator and generator
-    # Example: d_updates_per_step=5, g_updates_per_step=1 means D is trained 5 times for every 1 G update
+    # Number of updates per step for discriminator and generator.
+    # e.g. 5 means perform 5 minibatch updates grouped as a single step.
     d_updates_per_step: int = 1
     g_updates_per_step: int = 1
 
