@@ -31,7 +31,12 @@ class TrainerConfig:
     num_workers: int = 6
 
     batch_size: int = 128
-    grad_accum_steps: int = 1
+    grad_accum_steps: int = 1  # (split batch into sub-batches due to GPU memory limitations)
+
+    # Number of updates per step for discriminator and generator
+    # Example: d_updates_per_step=5, g_updates_per_step=1 means D is trained 5 times for every 1 G update
+    d_updates_per_step: int = 1
+    g_updates_per_step: int = 1
 
     # How many steps to increment after each batch
     steps_per_batch: int = 1
@@ -72,6 +77,8 @@ class TrainerConfig:
     def __post_init__(self):
         assert  self.steps_per_batch >= 1, "steps_per_batch must be at least 1."
         assert self.grad_accum_steps > 0, "grad_accum_steps must be at least 1."
+        assert self.d_updates_per_step >= 1, "d_updates_per_step must be at least 1."
+        assert self.g_updates_per_step >= 1, "g_updates_per_step must be at least 1."
 
         # Assert controlling steps are all multiples of steps_per_batch
         assert self.steps_checkpoint % self.steps_per_batch == 0, "steps_checkpoint must be a multiple of steps_per_batch."
@@ -215,8 +222,10 @@ class Trainer:
         self.optimizer_d.zero_grad()
 
         step = self.step
+        total_inner_steps = max(self.configs.g_updates_per_step, self.configs.d_updates_per_step)
+        inner_step = total_inner_steps
+        
         train_dataloader = data.train_dataloader()
-
         sampler = SmartSampler(train_dataloader, device=self.device, infinite=True, preload=True)
         for (imgs, labels) in sampler:
             metrics = {}
@@ -226,7 +235,18 @@ class Trainer:
 
                 # Execute the training step
                 batch = (imgs[start_idx:end_idx], labels[start_idx:end_idx])
-                metrics = self.training_step(accum_idx, batch)
+                metrics = self.training_step(
+                    global_step=step,
+                    inner_step=inner_step,
+                    accum_idx=accum_idx,
+                    batch=batch
+                )
+                
+            # Ensure every inner step is executed
+            inner_step -= 1
+            if inner_step > 0:
+                continue
+            inner_step = total_inner_steps
 
             if step % self.configs.steps_log == 0:
                 for logger in self.loggers:
@@ -265,9 +285,11 @@ class Trainer:
 
         self.after_training()
 
-    def training_step(self, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
+    def training_step(self, global_step: int, inner_step: int, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
         is_last_accum_batch = (accum_idx + 1) % self.configs.grad_accum_steps == 0
         imgs, labels = batch
+
+        self.model.current_step = global_step
 
         time_start = time.time()
 
