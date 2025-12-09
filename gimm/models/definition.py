@@ -24,7 +24,7 @@ class ModuleGAN(ABC, nn.Module):
         """
         Generate a batch of images from a latent vector
         """
-        return self.forward(latent)
+        return self.generator(latent)
 
     def discriminate(self, imgs: ImageTensor) -> Logits:
         """
@@ -55,11 +55,15 @@ class ModuleGAN(ABC, nn.Module):
 
     def loss_to_real(self, imgs: Tensor) -> tuple[Loss, Logits]:
         bs = imgs.size(0)
-        return self.compute_loss(imgs, torch.full((bs, ), 1, dtype=imgs.dtype, device=imgs.device))
+        return self.compute_loss(
+            imgs, torch.full((bs,), 1, dtype=imgs.dtype, device=imgs.device)
+        )
 
     def loss_to_fake(self, imgs: Tensor) -> tuple[Loss, Logits]:
         bs = imgs.size(0)
-        return self.compute_loss(imgs, torch.full((bs, ), 0, dtype=imgs.dtype, device=imgs.device))
+        return self.compute_loss(
+            imgs, torch.full((bs,), 0, dtype=imgs.dtype, device=imgs.device)
+        )
 
     @abstractmethod
     def compute_generator_loss(self, imgs: Tensor) -> tuple[Loss, ImageTensor]:
@@ -74,5 +78,29 @@ class ModuleGAN(ABC, nn.Module):
         """
         Returns the loss of the discriminator
         Remember to detach the generated images from the graph.
+        """
+        pass
+
+    def before_generator_step(self):
+        """
+        Hook to be called before the generator optimizer.step()
+        """
+        pass
+
+    def after_generator_step(self):
+        """
+        Hook to be called after the generator optimizer.step()
+        """
+        pass
+
+    def before_discriminator_step(self):
+        """
+        Hook to be called before the discriminator optimizer.step()
+        """
+        pass
+
+    def after_discriminator_step(self):
+        """
+        Hook to be called after the discriminator optimizer.step()
         """
         pass

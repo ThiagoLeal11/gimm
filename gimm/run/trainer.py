@@ -277,7 +277,6 @@ class Trainer:
         # fake_imgs = None
         # if accum_idx < accum_steps * self.configs.g_updates_per_step:
         g_loss, fake_imgs = self.model.compute_generator_loss(imgs)
-        self.backward(g_loss, self.lr_scheduler_g, self.optimizer_g, should_step=is_last_accum_batch)
 
         # train discriminator
         # if accum_idx < accum_steps * self.configs.d_updates_per_step:
@@ -285,7 +284,8 @@ class Trainer:
         #         fake_imgs = self.model.generate_images(imgs)
         # TODO: make it return a list so its more memory efficient (item_1.backward() and item_2.backward(), etc)
         d_loss = self.model.compute_discriminator_loss(imgs, fake_imgs)
-        self.backward(d_loss, self.lr_scheduler_d, self.optimizer_d, should_step=is_last_accum_batch)
+            self.backward('d', d_loss, should_step=is_last_accum_batch)
+            self.backward('g', g_loss, should_step=is_last_accum_batch)
 
         time_end = time.time()
 
@@ -297,8 +297,7 @@ class Trainer:
         }
         return metrics
 
-    def backward(self, loss: torch.Tensor, lr_scheduler: Scheduler, optimizer: torch.optim.Optimizer,
-                 should_step: bool):
+    def backward(self, module: Literal['g', 'd'], loss: Sequence[torch.Tensor] | torch.Tensor, should_step: bool):
         accum_steps = self.configs.grad_accum_steps
         if accum_steps > 1:
             loss /= accum_steps
@@ -306,10 +305,23 @@ class Trainer:
         loss.backward()
 
         if should_step:
+            if module == 'g':
+                self.model.before_generator_step()
+                optimizer = self.optimizer_g
+            else:
+                self.model.before_discriminator_step()
+                optimizer = self.optimizer_d
+
             optimizer.step()
             optimizer.zero_grad()
 
             lr_scheduler.step(current_loss=loss.item())
+            if module == 'g':
+                self.model.after_generator_step()
+                lr_scheduler = self.lr_scheduler_g
+            else:
+                self.model.after_discriminator_step()
+                lr_scheduler = self.lr_scheduler_d
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
         data = self.load_dataset(data, 'evaluation')
