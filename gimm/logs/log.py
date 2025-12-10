@@ -132,6 +132,8 @@ class LoggerWandb(Logger):
 
     def __init__(self, experiment: str, config: dict, tags: dict = None, resume_id: str = None, interval: int = 1):
         super().__init__(interval)
+        group = config.pop('group', None)
+        name = config.pop('execution_name', None)
         self.wandb = None
         self.wandb_kwargs = {
             'project': experiment,
@@ -140,6 +142,10 @@ class LoggerWandb(Logger):
             'resume': 'must' if resume_id else None,
             'id': resume_id if resume_id else None,
         }
+        if group:
+            self.wandb_kwargs['group'] = group
+        if name:
+            self.wandb_kwargs['name'] = name
 
     def set_resume(self, resume_id: str):
         if not resume_id:

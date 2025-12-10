@@ -27,7 +27,8 @@ warnings.formatwarning = custom_format_warning
 @dataclass
 class TrainerConfig:
     project: str = 'gimm'
-    group: str = 'default'
+    group: Optional[str] = None
+    execution_name: Optional[str] = None
     num_workers: int = 6
 
     batch_size: int = 128
