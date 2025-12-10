@@ -154,7 +154,7 @@ def clean_cache(config: dict) -> None:
 
 def compute_metrics(model: ModuleGAN, dataloader: DataLoader, metrics: list[FidelityEvalMetric], config: dict) -> dict[str, float]:
     kwargs = {
-        "cache": True,
+        "cache": False,
         "cache_root": config['output_path'] + "/cache/fidelity_cache",
         "input2_cache_name": config['experiment'],
         "input1_model_num_samples": config['samples'],
