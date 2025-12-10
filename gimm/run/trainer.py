@@ -216,18 +216,27 @@ class Trainer:
 
     def train(self, data: Optional[Dataset] = None):
         data = self.load_dataset(data)
-        self.before_training(data)
-        self.model.train()
+        try:
+            self.before_training(data)
+            self.model.train()
 
-        self.optimizer_g.zero_grad()
-        self.optimizer_d.zero_grad()
+            self.optimizer_g.zero_grad()
+            self.optimizer_d.zero_grad()
 
+            self.train_loop(data)
+
+            self.after_training()
+        finally:
+            self.finish_loggers()
+
+    def train_loop(self, data: Optional[Dataset] = None):
         step = self.step
         total_inner_steps = max(self.configs.g_updates_per_step, self.configs.d_updates_per_step)
         inner_step = total_inner_steps
-        
+
         train_dataloader = data.train_dataloader()
         sampler = SmartSampler(train_dataloader, device=self.device, infinite=True, preload=True)
+
         for (imgs, labels) in sampler:
             metrics = {}
             for accum_idx in range(self.configs.grad_accum_steps):
@@ -242,7 +251,7 @@ class Trainer:
                     accum_idx=accum_idx,
                     batch=batch
                 )
-                
+
             # Ensure every inner step is executed
             inner_step -= 1
             if inner_step > 0:
@@ -283,8 +292,6 @@ class Trainer:
             # All logs are taken from the start step.
             self.step += self.configs.steps_per_batch
             step = self.step
-
-        self.after_training()
 
     def training_step(self, global_step: int, inner_step: int, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
         is_last_accum_batch = (accum_idx + 1) % self.configs.grad_accum_steps == 0
@@ -368,6 +375,10 @@ class Trainer:
         })
 
         return metrics_value
+
+    def finish_loggers(self):
+        for logger in self.loggers:
+            logger.finish()
 
 
 def compute_item(tensors: Sequence[torch.Tensor] | torch.Tensor) -> int | float | bool | None:

@@ -22,6 +22,12 @@ class Logger(ABC):
         """
         pass
 
+    def finish(self):
+        """
+        This method is called after the training is finished.
+        """
+        pass
+
     def should_log(self, step: int) -> bool:
         return step - self.last_logged >= self.interval or step == 0 or step == self.last_logged
 
@@ -119,7 +125,10 @@ class LoggerWandb(Logger):
             cls._instance = super(LoggerWandb, cls).__new__(cls)
             return cls._instance
 
-        raise Exception("LoggerWandb is a singleton class. Only one instance is allowed.")
+        raise Exception(
+            "LoggerWandb is a singleton class. Only one instance is allowed. "
+            "Call .finish() on the existing instance to close it before creating a new one."
+        )
 
     def __init__(self, experiment: str, config: dict, tags: dict = None, resume_id: str = None, interval: int = 1):
         super().__init__(interval)
@@ -155,6 +164,12 @@ class LoggerWandb(Logger):
             return None
 
         return self.wandb.run.id
+
+    def finish(self):
+        if self.wandb:
+            self.wandb.finish()
+            self.wandb = None
+        LoggerWandb._instance = None
 
 
 def get_wandb_run_id(loggers: list[Logger]) -> str | None:
