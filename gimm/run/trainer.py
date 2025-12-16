@@ -1,12 +1,11 @@
 import pathlib
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Literal, Sequence
 
 import torch
 from torchvision import transforms
-import torch.backends.cudnn as cudnn
 
 from gimm.chekpoint import Checkpoint, clean_dir_deep
 from gimm.datasets.definition import Dataset
@@ -17,11 +16,52 @@ from gimm.models.definition import ModuleGAN
 from gimm.run.loader import dataset_loader
 from gimm.run.optimizer import Optimizer
 from gimm.scheduler.scheduler import Scheduler
+from gimm.eval.fidelity import MetricName
 
 
 def custom_format_warning(message, category, filename, lineno, line=None):
     return f"{filename}:{lineno}: {category.__name__}: {message}\n"
 warnings.formatwarning = custom_format_warning
+
+
+@dataclass
+class StopCondition:
+    metric: str
+    comparator: str
+    threshold: float
+    _valid_comparators = ['<', '>', '<=', '>=']
+
+    def __post_init__(self):
+        if self.comparator not in self._valid_comparators:
+            raise ValueError(f"Invalid comparator: {self.comparator}. Must be one of {self._valid_comparators}")
+
+        self.metric = self.metric.lower()
+        valid_metrics = [v[1] for v in vars(MetricName).values() if isinstance(v, tuple) and len(v) == 2]
+        if self.metric not in valid_metrics:
+            raise ValueError(f"Invalid metric name: {self.metric}. Valid options: {sorted(list(valid_metrics))}")
+
+    def check(self, value: float) -> bool:
+        if self.comparator == '<':
+            return value < self.threshold
+        elif self.comparator == '>':
+            return value > self.threshold
+        elif self.comparator == '<=':
+            return value <= self.threshold
+        elif self.comparator == '>=':
+            return value >= self.threshold
+        return False
+    
+    def __str__(self):
+        return f"{self.metric.upper()} {self.comparator} {self.threshold}"
+
+    @classmethod
+    def from_exp(cls, expression: str) -> 'StopCondition':
+        for op in cls._valid_comparators:
+            expression = expression.replace(op, f' {op} ')
+        parts = expression.split()
+        if len(parts) != 3:
+            raise ValueError(f"Invalid expression format: '{expression}'. Expected format: 'metric comparator value' (e.g. 'fid < 10.5')")
+        return cls(metric=parts[0], comparator=parts[1], threshold=float(parts[2]))
 
 
 @dataclass
@@ -75,6 +115,8 @@ class TrainerConfig:
     dataset_scale_policy: Literal['auto', 'strict', 'silent'] = 'auto'
 
     device: Optional[torch.device] = None
+
+    stop_conditions: list[StopCondition] = field(default_factory=list)
 
     def __post_init__(self):
         assert  self.steps_per_batch >= 1, "steps_per_batch must be at least 1."
@@ -286,6 +328,20 @@ class Trainer:
                 for logger in self.loggers:
                     eval_metrics = {f'eval_{k}': v for k, v in metrics.items()}
                     logger.log(step=step, metrics=eval_metrics)
+
+                # Check for early stopping
+                should_stop = False
+                for condition in self.configs.stop_conditions:                    
+                    if condition.metric not in metrics:
+                        #TODO: adicionar validação de compilação (quais métricas estão ativas para quais ele está configurando no stop_condition)
+                        continue
+
+                    if condition.check(metrics[condition.metric]):
+                        print(f"\n[Early Stopping] Condition met: {condition} (Current value: {metrics[condition.metric]:.4f})")
+                        should_stop = True
+
+                if should_stop:
+                    break
 
             if step >= self.configs.steps_total:
                 break

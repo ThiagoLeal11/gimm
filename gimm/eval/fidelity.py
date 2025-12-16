@@ -16,6 +16,35 @@ from gimm.models.definition import ModuleGAN
 PRIMITIVE = str | int | float | bool
 
 
+class MetricName:
+    IS_MEAN = ("inception_score_mean", "is_mean")
+    IS_STD = ("inception_score_std", "is_std")
+
+    FID = ("frechet_inception_distance", "fid")
+
+    KID_MEAN = ("kernel_inception_distance_mean", "kid_mean")
+    KID_STD = ("kernel_inception_distance_std", "kid_std")
+
+    PPL_MEAN = ("perceptual_path_length_mean", "ppl_mean")
+    PPL_STD = ("perceptual_path_length_std", "ppl_std")
+
+    PRECISION = ("precision", "precision")
+    RECALL = ("recall", "recall")
+    F_SCORE = ("f_score", "f_score")
+
+
+def _normalize_metrics(metrics_dict: dict[str, float]) -> dict[str, float]:
+    metrics_map = {
+        v[0]: v[1]
+        for k, v in vars(MetricName).items()
+        if isinstance(v, tuple) and len(v) == 2
+    }
+    return {
+        metrics_map.get(k, k): v
+        for k, v in metrics_dict.items()
+    }
+
+
 def _to_int8(images: torch.Tensor) -> torch.Tensor:
     uint8_images = ((images + 1) * 127.5).clamp(0, 255).to(torch.uint8)
 
@@ -174,4 +203,4 @@ def compute_metrics(model: ModuleGAN, dataloader: DataLoader, metrics: list[Fide
         input2=reference_wrapper,
         **kwargs,
     )
-    return metrics_dict
+    return _normalize_metrics(metrics_dict)
