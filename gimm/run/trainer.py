@@ -9,7 +9,8 @@ from torchvision import transforms
 
 from gimm.chekpoint import Checkpoint, clean_dir_deep
 from gimm.datasets.definition import Dataset
-from gimm.datasets.sampler import SmartSampler
+from gimm.dataloaders.infinite import InfinitePrefetchLoader
+from gimm.dataloaders.eval import ValidationLoader
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
 from gimm.logs.log import Logger, get_wandb_run_id, LoggerWandb
 from gimm.models.definition import ModuleGAN
@@ -117,6 +118,11 @@ class TrainerConfig:
     device: Optional[torch.device] = None
 
     stop_conditions: list[StopCondition] = field(default_factory=list)
+
+    # Validation
+    validation_samples: int = 20_000
+    validation_policy: Literal['repeat', 'supplement', 'strict'] = 'strict'
+    split_config: Optional[list[int]] = None
 
     def __post_init__(self):
         assert  self.steps_per_batch >= 1, "steps_per_batch must be at least 1."
@@ -253,8 +259,13 @@ class Trainer:
             name=cfg.dataset,
             batch_size=cfg.batch_size * cfg.grad_accum_steps,
             num_workers=cfg.num_workers,
-            data_dir=cfg.dataset_dir
+            data_dir=cfg.dataset_dir,
+            split_config=cfg.split_config,
         )
+
+        if self.configs.validation_policy == 'strict' and dataset.get_splits()[1] < cfg.validation_samples:
+            raise ValueError(f"Validation set size ({dataset.get_splits()[1]}) is smaller than validation_samples ({cfg.validation_samples}) under 'strict' policy. Change to 'repeat', 'supplement' (with complete the samples with train samples), or reduce validation_samples.")
+
         return self.scale_dataset_to_model(dataset, self.model.in_features, cfg.dataset_scale_policy)
 
     def train(self, data: Optional[Dataset] = None):
@@ -278,7 +289,7 @@ class Trainer:
         inner_step = total_inner_steps
 
         train_dataloader = data.train_dataloader()
-        sampler = SmartSampler(train_dataloader, device=self.device, infinite=True, preload=True)
+        sampler = InfinitePrefetchLoader(train_dataloader, device=self.device, infinite=True, preload=True)
 
         for (imgs, labels) in sampler:
             metrics = {}
@@ -416,16 +427,29 @@ class Trainer:
         data = self.load_dataset(data)
 
         self.before_evaluate(data)
-        dataloader = data.train_dataloader()
+        
+        # Configure ValSampler
+        val_loader = data.validation_dataloader()
+        train_loader = None
+        if self.configs.validation_policy == 'supplement':
+            train_loader = data.train_dataloader()
+
+        sampler = ValidationLoader(
+            dataloader=val_loader,
+            supplement_dataloader=train_loader,
+            target_samples=self.configs.validation_samples,
+            policy=self.configs.validation_policy
+        )
+        
         self.model.eval()
 
         if self.device.type.startswith('cuda') and not self.device.type.endswith(':0'):
             torch.cuda.set_device(self.device)
 
-        metrics_value = compute_metrics(model=self.model, dataloader=dataloader, metrics=self.eval_metrics, config={
+        metrics_value = compute_metrics(model=self.model, dataloader=sampler, metrics=self.eval_metrics, config={
             'output_path': self.configs.output_path,
             'experiment': self.configs.project,
-            'samples': 20_000,
+            'samples': self.configs.validation_samples,
             'batch_size': self.configs.batch_size,
             'device': self.device,
             'verbose': True,

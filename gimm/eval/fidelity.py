@@ -1,7 +1,7 @@
-import math
 import pathlib
 import shutil
 from abc import abstractmethod
+from typing import Iterable
 
 import torch
 import torch_fidelity
@@ -14,7 +14,7 @@ from gimm.models.definition import ModuleGAN
 
 
 PRIMITIVE = str | int | float | bool
-
+Batch = tuple[torch.Tensor, torch.Tensor]
 
 class MetricName:
     IS_MEAN = ("inception_score_mean", "is_mean")
@@ -86,23 +86,17 @@ class FidelityModelWrapper(GenerativeModelBase):
 
 
 class FidelityDataloaderWrapper(GenerativeModelBase):
-    def __init__(self, dataloader: DataLoader, batch_size: int, device: torch.device):
+    def __init__(self, dataloader: DataLoader | Iterable[Batch], device: torch.device):
         super().__init__()
         self.device = device
-        generator = self.dataloader_to_stream(dataloader, batch_size)
+        generator = self.dataloader_to_stream(dataloader)
         self.stream = iter(generator)
 
     @staticmethod
-    def dataloader_to_stream(dataloader: DataLoader, batch_size: int):
-        buffer = torch.Tensor([])
+    def dataloader_to_stream(dataloader: DataLoader | Iterable[Batch]):
         while True:
             for (imgs, labels) in dataloader:
-                buffer = torch.cat((buffer, imgs), dim=0)
-
-                if buffer.shape[0] >= batch_size:
-                    batch = buffer[:batch_size]
-                    buffer = buffer[batch_size:]
-                    yield batch
+                yield imgs
 
     @property
     def z_size(self):
@@ -181,7 +175,7 @@ def clean_cache(config: dict) -> None:
     cache_path.mkdir(parents=True, exist_ok=True)
 
 
-def compute_metrics(model: ModuleGAN, dataloader: DataLoader, metrics: list[FidelityEvalMetric], config: dict) -> dict[str, float]:
+def compute_metrics(model: ModuleGAN, dataloader: DataLoader | Iterable[Batch], metrics: list[FidelityEvalMetric], config: dict) -> dict[str, float]:
     kwargs = {
         "cache": False,
         "cache_root": config['output_path'] + "/cache/fidelity_cache",
@@ -195,7 +189,7 @@ def compute_metrics(model: ModuleGAN, dataloader: DataLoader, metrics: list[Fide
     for metric in metrics:
         kwargs.update(metric.compile())
 
-    reference_wrapper = FidelityDataloaderWrapper(dataloader, config['batch_size'], config['device'])
+    reference_wrapper = FidelityDataloaderWrapper(dataloader, config['device'])
     generated_wrapper = FidelityModelWrapper(model)
 
     metrics_dict = torch_fidelity.calculate_metrics(

@@ -8,7 +8,7 @@ DL = torch.utils.data.DataLoader
 BATCH = tuple[torch.Tensor, torch.Tensor]
 
 
-class SmartSampler:
+class InfinitePrefetchLoader:
     def __init__(self, dataloader: DL, device: torch.device = None, *, queue_size: int = 4, infinite: bool = True, preload: bool = True):
         self.dataloader = dataloader
         self.batch_size = dataloader.batch_size
