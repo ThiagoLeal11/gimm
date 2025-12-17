@@ -2,8 +2,10 @@ from abc import ABC, abstractmethod
 from typing import Literal, Optional, Sequence, Callable
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision.transforms import v2
+import logging
+
 
 
 class Dataset(ABC):
@@ -22,8 +24,13 @@ class Dataset(ABC):
         persistent_workers: bool = True,
         # List of transformations to apply to the dataset, defaults to [ToTensor(), Normalize(0.5)]
         transformations: Optional[Sequence[Callable]] = None,
+
+        split_config: Optional[list[int]] = None,
     ):
         super().__init__()
+        self.split: Optional[Sequence[int]] = None
+        self.split_config = split_config
+
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -36,14 +43,19 @@ class Dataset(ABC):
 
         torch.manual_seed(self.seed)
 
-        self.dims: Optional[Sequence[int]] = None
+        self.dims: Sequence[int] | None = None
         self.num_classes: Optional[int] = None
         self.transformations = transformations
         self.definitions()
 
         assert self.dims is not None, "Dataset dimensions must be defined in definitions() method."
         assert self.num_classes is not None, "Number of classes must be defined in definitions() method."
+        assert self.split is not None, "Dataset split must be defined in definitions() method."
+        assert len(self.split) == 3, "Dataset split must be a list of three integers: [train_size, val_size, test_size]"
 
+        if self.split_config:
+            assert len(self.split_config) == 3, "split_config must be a list of three integers: [train_size, val_size, test_size]"
+            self.split = self.split_config
 
         if self.transformations is None:
             t = [
@@ -55,6 +67,42 @@ class Dataset(ABC):
 
         self.prepare_data()
         self.dataset_train, self.dataset_val, self.dataset_test = None, None, None
+        self._validation_applied = False
+
+    def _split_train_val(self, full_train_dataset):
+        split = self.get_splits()  # format: [train_size, val_size, test_size]
+        train_size, val_size = split[:2]
+        full_len = len(full_train_dataset)
+
+        if train_size == -1:
+            train_size = full_len - val_size
+        elif val_size == -1:
+            val_size = full_len - train_size
+
+        if train_size + val_size != full_len:
+             raise ValueError(f"Split sizes {train_size} + {val_size} do not match dataset length {full_len}")
+
+        datasets =  random_split(
+            full_train_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(self.seed)
+        )
+
+        self._verify_split_sizes()
+        return datasets
+
+    def _verify_split_sizes(self):
+        if self.split is None:
+            return
+
+        expected_train, expected_val, expected_test = self.split
+        if self.dataset_train and len(self.dataset_train) != expected_train:
+            logging.warning(f"Train dataset size mismatch: Expected {expected_train}, Got {len(self.dataset_train)}")
+        if self.dataset_val and len(self.dataset_val) != expected_val:
+            logging.warning(f"Validation dataset size mismatch: Expected {expected_val}, Got {len(self.dataset_val)}")
+        if self.dataset_test and len(self.dataset_test) != expected_test:
+            logging.warning(f"Test dataset size mismatch: Expected {expected_test}, Got {len(self.dataset_test)}")
+
+    def get_splits(self) -> Sequence[int] | None:
+        return self.split
 
     @abstractmethod
     def definitions(self):
@@ -82,7 +130,7 @@ class Dataset(ABC):
     def train_dataloader(self):
         if self.dataset_train is None:
             self.setup("train")
-
+        
         return DataLoader(
             self.dataset_train,
             batch_size=self.batch_size,
@@ -94,7 +142,7 @@ class Dataset(ABC):
             persistent_workers=self.persistent_workers,
         )
 
-    def val_dataloader(self):
+    def validation_dataloader(self):
         if self.dataset_val is None:
             self.setup("train")
 
