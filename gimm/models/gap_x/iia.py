@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from gimm.models.gap_x.iia_new import compute_iia_heatmap_single_new
+
 
 def get_interpolated_values(baseline, target, num_steps):
     """
@@ -43,6 +45,9 @@ def backward_class_score_and_get_gradients(discriminator, label, x, device):
     """
     Realiza backpropagation para uma classe específica e retorna os gradientes das ativações.
 
+    Usa torch.autograd.grad() em vez de backward() para ser compatível com treinamento,
+    permitindo calcular gradientes sem interferir no grafo computacional principal.
+
     Args:
         discriminator: Discriminator model
         label: Label da classe alvo (int, não tensor)
@@ -53,7 +58,9 @@ def backward_class_score_and_get_gradients(discriminator, label, x, device):
         Gradientes das ativações
     """
     discriminator.zero_grad()
-    preds = discriminator.forward_from_activations(x.to(device), hook=True)
+    x.requires_grad = True
+    x.requires_grad_(True)
+    preds = discriminator.forward_from_activations(x.to(device), hook=False)
 
     # Debug: verificar se preds tem valores diferentes para cada classe
     # print(f"Preds shape: {preds.shape}, values: {preds[0]}")
@@ -62,9 +69,14 @@ def backward_class_score_and_get_gradients(discriminator, label, x, device):
     one_hot[:, label] = 1  # label deve ser int
 
     score = torch.sum(one_hot * preds)
-    score.backward()
 
-    gradients = discriminator.get_activations_gradient()
+    gradients = torch.autograd.grad(
+        outputs=score,
+        inputs=x,
+        retain_graph=True,  # True para não deletar o grafo do treino principal
+        create_graph=False,
+        only_inputs=True
+    )[0]
 
     # Debug: verificar gradientes
     # print(f"Label: {label}, Score: {score.item()}, Grad mean: {gradients.mean().item()}, Grad std: {gradients.std().item()}")
@@ -144,7 +156,7 @@ def compute_iia_heatmap_single(discriminator, image, label, num_steps, device):
     image_size = image.shape[2]
 
     # Obtém ativações
-    activations = discriminator.get_activations(image).cpu()
+    activations = discriminator.get_activations(image)
     activations_featmap = activations.unsqueeze(1)
 
     # Baseline: mínimo das ativações
@@ -210,8 +222,9 @@ def compute_iia_heatmap(discriminator, images, label, num_steps, device):
         # Processa cada imagem individualmente (como na referência)
         single_image = images[i:i+1]  # [1, C, H, W]
         # label é passado como int (não tensor)
-        heatmap = compute_iia_heatmap_single(discriminator, single_image, label, num_steps, device)
-        heatmaps.append(heatmap)
+        # heatmap = compute_iia_heatmap_single(discriminator, single_image, label, num_steps, device)
+        new_heatmap = compute_iia_heatmap_single_new(discriminator, single_image, label, num_steps, device)
+        heatmaps.append(new_heatmap)
 
     # Empilha os heatmaps: [batch_size, H, W]
     return torch.stack(heatmaps)
