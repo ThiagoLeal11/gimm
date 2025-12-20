@@ -10,8 +10,8 @@ from torch import Tensor
 from typing_extensions import Optional
 
 from gimm.models.definition import ModuleGAN, SampleTensor, Loss, Logits, Size
-from gimm.models.xdcgan import compute_iia_heatmap
-import torch.nn.functional as F
+
+from gimm.models.gap_x.iia_new import compute_iia_heatmap
 
 
 # custom weights initialization called on netG and netD
@@ -104,49 +104,13 @@ class DCGANDiscriminator(nn.Module):
         # Hook for storing gradients for IIA (igual ao GradModel)
         self.gradients = None
 
-    def forward(self, x, hook=False):
-        if len(list(x.shape)) > 4:
-            x = x.squeeze(1)
+    def forward(self, x):
+        return self.classifier(self.features(x))
 
-        x = self.features(x)
-        if hook:
-            x.register_hook(self.activations_hook)
+    def forward_classifier(self, x):
+        return self.classifier(x)
 
-        output = self.classifier(x)
-        return output.view(-1, 2)  # [batch_size, 2]
-
-    def forward_from_activations(self, x, hook=True):
-        """
-        Forward pass a partir das ativações (para IIA).
-        Equivalente a forward com only_post_features=True no GradModel.
-
-        Args:
-            x: Tensor de ativações
-            hook: Se True, registra hook para capturar gradientes
-
-        Nota: No GradModel original, há post_features + relu + avgpool + flatten antes do classifier.
-        No DCGAN, as features já terminam com LeakyReLU, então não aplicamos ReLU adicional.
-        """
-        if len(list(x.shape)) > 4:
-            x = x.squeeze(1)
-
-        if hook:
-            x.register_hook(self.activations_hook)
-
-        output = self.classifier(x)
-        output = output.view(-1, 2)  # [batch_size, 2]
-        return output
-
-    def activations_hook(self, grad):
-        """Hook para capturar gradientes das ativações."""
-        self.gradients = grad.detach().clone()
-
-    def get_activations_gradient(self):
-        """Retorna os gradientes das ativações."""
-        return self.gradients
-
-    def get_activations(self, x):
-        """Extrai as ativações da camada de features."""
+    def forward_features(self, x):
         return self.features(x)
 
 
@@ -181,88 +145,69 @@ class DCGAN(ModuleGAN):
 
     def compute_generator_loss(self, imgs: Tensor) -> Sequence[Tensor] | Tensor:
         fake_imgs = self.generate_random_samples(imgs)
-        g_loss, _ = self.loss_to_real(fake_imgs)
+        g_loss, g_logits = self.loss_to_real(fake_imgs)
 
-        device = imgs.device
-        if self.current_step % 20_000 == 0:
+        # contem a probabilidade (0 a 1) onde 0 é 100% fake e 1 é 100% real
+        g_prob = torch.softmax(g_logits, dim=1)[:, 0].detach()
+
+        if self.current_step < 20_000 or True:
+            device = imgs.device
             # Compute IIA saliency maps usando a implementação de referência
             with torch.enable_grad():
                 # Saliency map for "fake" class (class 1)
                 rel_fake = compute_iia_heatmap(
                     self.discriminator,
                     fake_imgs.detach(),
-                    label=1,  # fake class
-                    num_steps=self.iia_steps,
-                    device=device
+                    label=0,  # fake class
                 )
 
                 # Saliency map for "real" class (class 0)
                 rel_real = compute_iia_heatmap(
                     self.discriminator,
                     fake_imgs.detach(),
-                    label=0,  # real class
-                    num_steps=self.iia_steps,
-                    device=device
+                    label=1,  # real class
                 )
 
-                # Saliency maps for real images
-                rel_real_fake = compute_iia_heatmap(
-                    self.discriminator,
-                    imgs.detach(),
-                    label=1,
-                    num_steps=self.iia_steps,
-                    device=device
-                )
-                rel_real_real = compute_iia_heatmap(
-                    self.discriminator,
-                    imgs.detach(),
-                    label=0,
-                    num_steps=self.iia_steps,
-                    device=device
-                )
-
-            # Expand saliency maps to match image channels
-            rel_fake = rel_fake.unsqueeze(1).to(device)  # [batch_size, 1, H, W]
-            rel_real = rel_real.unsqueeze(1).to(device)  # [batch_size, 1, H, W]
-            rel_real_fake = rel_real_fake.unsqueeze(1).to(device)
-            rel_real_real = rel_real_real.unsqueeze(1).to(device)
-
-            # Resize if needed (should already be correct size)
-            if rel_fake.shape[2:] != fake_imgs.shape[2:]:
-                rel_fake = F.interpolate(rel_fake, size=fake_imgs.shape[2:],
-                                        mode='bicubic', align_corners=False)
-                rel_real = F.interpolate(rel_real, size=fake_imgs.shape[2:],
-                                        mode='bicubic', align_corners=False)
-                rel_real_fake = F.interpolate(rel_real_fake, size=fake_imgs.shape[2:],
-                                              mode='bicubic', align_corners=False)
-                rel_real_real = F.interpolate(rel_real_real, size=fake_imgs.shape[2:],
-                                              mode='bicubic', align_corners=False)
+                if self.current_step % 20_000 == 0:
+                    # Saliency maps for real images
+                    rel_real_fake = compute_iia_heatmap(
+                        self.discriminator,
+                        imgs.detach(),
+                        label=0,
+                    )
+                    rel_real_real = compute_iia_heatmap(
+                        self.discriminator,
+                        imgs.detach(),
+                        label=1,
+                    )
 
             # Apply IIA loss: encourage high values in real regions, low in fake regions
-            iia_loss = (rel_fake * fake_imgs).sum() # - (rel_real * fake_imgs).sum()
+            iia_loss = (rel_fake.detach() * fake_imgs).flatten(1).sum(1) * (1 - g_prob.detach()) - (rel_real.detach() * fake_imgs).flatten(1).sum(1) * g_prob.detach()
 
             # Total generator loss
             weight_warmup = (self.current_step - 20_000) / 10_000
             split = weight_warmup * self.iia_weight
-            total_loss = g_loss * (1 - split) + split * iia_loss
+            total_loss = g_loss * (1 - split) + split * iia_loss.mean()
 
-            image_path = pathlib.Path('output/maps/')
-            image_path.mkdir(parents=True, exist_ok=True)
-            grid_fake = torchvision.utils.make_grid(fake_imgs, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_fake, image_path / f'fake_imgs_{self.current_step}.png')
-            grid_rel_fake = torchvision.utils.make_grid(rel_fake, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_rel_fake, image_path / f'rel_fake_{self.current_step}.png')
-            grid_rel_real = torchvision.utils.make_grid(rel_real, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_rel_real, image_path / f'rel_real_{self.current_step}.png')
+            if self.current_step % 20_000 == 0:
+                image_path = pathlib.Path('output/maps/')
+                image_path.mkdir(parents=True, exist_ok=True)
+                grid_fake = torchvision.utils.make_grid(fake_imgs, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_fake, image_path / f'fake_imgs_{self.current_step}.png')
+                grid_rel_fake = torchvision.utils.make_grid(rel_fake, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_rel_fake, image_path / f'rel_fake_{self.current_step}.png')
+                grid_rel_real = torchvision.utils.make_grid(rel_real, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_rel_real, image_path / f'rel_real_{self.current_step}.png')
 
-            grid_real = torchvision.utils.make_grid(imgs, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_real, image_path / f'real_imgs_{self.current_step}.png')
-            grid_rel_real_fake = torchvision.utils.make_grid(rel_real_fake, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_rel_real_fake, image_path / f'zrel_real_fake_{self.current_step}.png')
-            grid_rel_real_real = torchvision.utils.make_grid(rel_real_real, normalize=True, scale_each=True)
-            torchvision.utils.save_image(grid_rel_real_real, image_path / f'zrel_real_real_{self.current_step}.png')
-
-        return g_loss
+                grid_real = torchvision.utils.make_grid(imgs, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_real, image_path / f'real_imgs_{self.current_step}.png')
+                grid_rel_real_fake = torchvision.utils.make_grid(rel_real_fake, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_rel_real_fake, image_path / f'zrel_real_fake_{self.current_step}.png')
+                grid_rel_real_real = torchvision.utils.make_grid(rel_real_real, normalize=True, scale_each=True)
+                torchvision.utils.save_image(grid_rel_real_real, image_path / f'zrel_real_real_{self.current_step}.png')
+        else:
+            total_loss = g_loss
+        return total_loss
 
     def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Sequence[Tensor] | Tensor:
         real_loss, _ = self.loss_to_real(imgs)
