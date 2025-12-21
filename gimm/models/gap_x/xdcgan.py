@@ -1,13 +1,13 @@
 """ Copied from https://github.com/pytorch/examples/blob/main/dcgan/main.py """
 import pathlib
-from typing import Sequence
+from dataclasses import dataclass
+from typing import Sequence, Literal, Optional
 
 import torch
 import torch.nn as nn
 import torchvision
 
 from torch import Tensor
-from typing_extensions import Optional
 
 from gimm.models.definition import ModuleGAN, SampleTensor, Loss, Logits, Size
 
@@ -114,8 +114,26 @@ class DCGANDiscriminator(nn.Module):
         return self.features(x)
 
 
+@dataclass
+class ConfigIIA:
+    # iia_loss_weight: w < 1: interpolates between GAN loss and IIA loss. w > 1: adds IIA loss to GAN loss.
+    iia_loss_weight: float = 0.5
+    iia_start_step: int = 20_000
+    iia_warmup_steps: int = 10_000
+    # Weights real and fake maps according to the probability of being real/fake
+    iia_map_weighting: bool = True
+    iia_maps: Literal['fake', 'real', 'both'] = 'both'
+    iia_maps_save_interval: int = 20_000
+
+
 class DCGAN(ModuleGAN):
-    def __init__(self, in_features: Optional[Size] = None, latent_dim: int = 128):
+    def __init__(
+        self,
+        in_features: Optional[Size] = None,
+        latent_dim: int = 128,
+        iia_config: Optional[ConfigIIA] = None,
+        output_path: str = 'output'
+    ):
         super().__init__()
 
         if not in_features:
@@ -123,9 +141,8 @@ class DCGAN(ModuleGAN):
 
         self.in_features = in_features
         self.latent_dim = latent_dim
-
-        self.iia_weight = 0.02
-        self.iia_steps = 10
+        self.iia_config = iia_config or ConfigIIA()
+        self.output_path = output_path
 
         assert len(in_features) == 3, "in_features must be a list of 3 integers (channels, height, width)"
         assert in_features[0] in [1, 3], "in_features[0] must be either 1 (grayscale) or 3 (RGB)"
@@ -147,69 +164,82 @@ class DCGAN(ModuleGAN):
         fake_imgs = self.generate_random_samples(imgs)
         g_loss, g_logits = self.loss_to_real(fake_imgs)
 
-        # contem a probabilidade (0 a 1) onde 0 é 100% fake e 1 é 100% real
-        g_prob = torch.softmax(g_logits, dim=1)[:, 0].detach()
+        # Log iia heatmaps
+        if self.current_step % self.iia_config.iia_maps_save_interval == 0:
+            self.iia_save_heatmaps(fake_imgs, imgs)
 
-        if self.current_step < 20_000 or True:
-            device = imgs.device
-            # Compute IIA saliency maps usando a implementação de referência
-            with torch.enable_grad():
-                # Saliency map for "fake" class (class 1)
-                rel_fake = compute_iia_heatmap(
-                    self.discriminator,
-                    fake_imgs.detach(),
-                    label=0,  # fake class
-                )
+        # Skip IIA loss before start step
+        if self.current_step < self.iia_config.iia_start_step:
+            return g_loss
 
-                # Saliency map for "real" class (class 0)
-                rel_real = compute_iia_heatmap(
-                    self.discriminator,
-                    fake_imgs.detach(),
-                    label=1,  # real class
-                )
+        # IIA Map Weighting
+        real_prob = fake_prob = 1.0
+        if self.iia_config.iia_map_weighting:
+            real_prob = torch.softmax(g_logits, dim=1)[:, 0].detach()
+            fake_prob = (1.0 - real_prob).detach()
 
-                if self.current_step % 20_000 == 0:
-                    # Saliency maps for real images
-                    rel_real_fake = compute_iia_heatmap(
-                        self.discriminator,
-                        imgs.detach(),
-                        label=0,
-                    )
-                    rel_real_real = compute_iia_heatmap(
-                        self.discriminator,
-                        imgs.detach(),
-                        label=1,
-                    )
+        # IIA maps selection
+        if self.iia_config.iia_maps == 'fake':
+            fake_prob = 0.0
+        elif self.iia_config.iia_maps == 'real':
+            real_prob = 0.0
 
-            # Apply IIA loss: encourage high values in real regions, low in fake regions
-            iia_loss = (rel_fake.detach() * fake_imgs).flatten(1).sum(1) * (1 - g_prob.detach()) - (rel_real.detach() * fake_imgs).flatten(1).sum(1) * g_prob.detach()
+        # IIA loss
+        fake_map, real_map = self.iia_compute_heatmap(fake_imgs)
+        iia_loss = (
+            (fake_map * fake_imgs).flatten(1).sum(1) * fake_prob
+            - (real_map * fake_imgs).flatten(1).sum(1) * real_prob
+        ).mean()
 
-            # Total generator loss
-            weight_warmup = (self.current_step - 20_000) / 10_000
-            split = weight_warmup * self.iia_weight
-            total_loss = g_loss * (1 - split) + split * iia_loss.mean()
+        weight_warmup = self._compute_iia_weight_warmup(self.current_step, self.iia_config)
 
-            if self.current_step % 20_000 == 0:
-                image_path = pathlib.Path('output/maps/')
-                image_path.mkdir(parents=True, exist_ok=True)
-                grid_fake = torchvision.utils.make_grid(fake_imgs, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_fake, image_path / f'fake_imgs_{self.current_step}.png')
-                grid_rel_fake = torchvision.utils.make_grid(rel_fake, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_rel_fake, image_path / f'rel_fake_{self.current_step}.png')
-                grid_rel_real = torchvision.utils.make_grid(rel_real, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_rel_real, image_path / f'rel_real_{self.current_step}.png')
+        # Combine loss weights
+        loss_weight = 1.0 - (self.iia_config.iia_loss_weight * weight_warmup)
+        iia_weight = self.iia_config.iia_loss_weight * weight_warmup
+        if self.iia_config.iia_loss_weight > 1.0:
+            loss_weight = 1.0
+            iia_weight = (self.iia_config.iia_loss_weight - 1.0) * weight_warmup
 
-                grid_real = torchvision.utils.make_grid(imgs, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_real, image_path / f'real_imgs_{self.current_step}.png')
-                grid_rel_real_fake = torchvision.utils.make_grid(rel_real_fake, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_rel_real_fake, image_path / f'zrel_real_fake_{self.current_step}.png')
-                grid_rel_real_real = torchvision.utils.make_grid(rel_real_real, normalize=True, scale_each=True)
-                torchvision.utils.save_image(grid_rel_real_real, image_path / f'zrel_real_real_{self.current_step}.png')
-        else:
-            total_loss = g_loss
-        return total_loss
+        # Join losses
+        return g_loss * loss_weight, iia_loss * iia_weight
+
 
     def compute_discriminator_loss(self, imgs: Tensor, fake_imgs: Tensor) -> Sequence[Tensor] | Tensor:
         real_loss, _ = self.loss_to_real(imgs)
         fake_loss, _ = self.loss_to_fake(fake_imgs)
         return real_loss, fake_loss
+
+    def iia_compute_heatmap(self, images: Tensor) -> tuple[Tensor, Tensor]:
+        rel_fake = compute_iia_heatmap(self.discriminator, images.detach(), label=0)  # fake class
+        rel_real = compute_iia_heatmap(self.discriminator, images.detach(), label=1)  # real class
+        return rel_fake, rel_real
+
+    def iia_save_heatmaps(self, fake_imgs: Tensor, real_imgs: Tensor):
+        fake_map, real_map = self.iia_compute_heatmap(fake_imgs)
+        real_as_fake_map = compute_iia_heatmap(self.discriminator, real_imgs.detach(), label=0)
+        real_as_real_map = compute_iia_heatmap(self.discriminator, real_imgs.detach(), label=1)
+        base_path = pathlib.Path(f'{self.output_path}/iia_heatmaps/')
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        self._save_imgs_grid(base_path / f'{self.current_step}_fake_map.png', fake_map)
+        self._save_imgs_grid(base_path / f'{self.current_step}_real_map.png', real_map)
+
+        self._save_imgs_grid(base_path / f'{self.current_step}_real_as_fake_map.png', real_as_fake_map)
+        self._save_imgs_grid(base_path / f'{self.current_step}_real_as_real_map.png', real_as_real_map)
+
+        self._save_imgs_grid(base_path / f'{self.current_step}_fake_imgs.png', fake_imgs)
+        self._save_imgs_grid(base_path / f'{self.current_step}_real_imgs.png', real_imgs)
+
+    @staticmethod
+    def _save_imgs_grid(path: pathlib.Path, imgs: Tensor):
+        grid = torchvision.utils.make_grid(imgs, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid, path)
+
+    @staticmethod
+    def _compute_iia_weight_warmup(step: int, config: ConfigIIA) -> float:
+        if step < config.iia_start_step:
+            return 0.0
+        elif step >= config.iia_start_step + config.iia_warmup_steps:
+            return 1.0
+        else:
+            return (step - config.iia_start_step) / config.iia_warmup_steps

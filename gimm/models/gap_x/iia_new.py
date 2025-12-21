@@ -12,14 +12,15 @@ def samples_linear_normalization(samples: torch.Tensor) -> torch.Tensor:
 
 def compute_gradients_for_label(discriminator: torch.nn.Module, activations: torch.Tensor, label: int):
     acts = activations.detach().clone().requires_grad_(True)
-    logits = discriminator.forward_classifier(acts)
+    with torch.enable_grad():
+        logits = discriminator.forward_classifier(acts)
 
-    one_hot = torch.zeros_like(logits)
-    one_hot[:, label] = 1
-    score = torch.sum(one_hot * logits)
+        one_hot = torch.zeros_like(logits)
+        one_hot[:, label] = 1
+        score = torch.sum(one_hot * logits)
 
     gradients = torch.autograd.grad(outputs=score, inputs=acts, create_graph=False)[0]
-    return gradients
+    return gradients.detach()
 
 
 def compute_iia_heatmap(discriminator: torch.nn.Module, images: torch.Tensor, label: int):
