@@ -184,7 +184,6 @@ class Trainer:
                 # Execute the training step
                 batch = (imgs[start_idx:end_idx], labels[start_idx:end_idx])
                 metrics = self.training_step(
-                    global_step=step,
                     inner_step=inner_step,
                     accum_idx=accum_idx,
                     batch=batch
@@ -245,39 +244,42 @@ class Trainer:
             self.step += self.configs.steps_per_batch
             step = self.step
 
-    def training_step(self, global_step: int, inner_step: int, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
-        is_last_accum_batch = (accum_idx + 1) % self.configs.grad_accum_steps == 0
-        imgs, labels = batch
-
-        self.model.current_step = global_step
-
+    def training_step(self, inner_step: int, accum_idx: int, batch: tuple[torch.Tensor, torch.Tensor]) -> dict:
+        """
+        :param inner_step: The current inner training step (when using multiple updates per step).
+        :param accum_idx: The current accumulation index (for gradient accumulation).
+        :param batch: A tuple containing the input images and their corresponding labels.
+        :return: A dictionary containing the training metrics.
+        """
+        self.model.current_step = self.step
         time_start = time.time()
 
         # train discriminator
         d_loss = None
         if inner_step <= self.configs.d_updates_per_step:
-            fake_imgs = self.model.get_previous_generated_samples(imgs)
-            d_loss = self.model.compute_discriminator_loss(imgs, fake_imgs)
-            self.backward('d', d_loss, should_step=is_last_accum_batch)
+            d_backward = lambda l: self.backward('d', l, accum_idx)
+            d_loss = self.model.discriminator_train_step(batch, d_backward)
 
         # train generator
         g_loss = None
         if inner_step <= self.configs.g_updates_per_step:
-            g_loss = self.model.compute_generator_loss(imgs)
-            self.backward('g', g_loss, should_step=is_last_accum_batch)
+            g_backward = lambda l: self.backward('g', l, accum_idx)
+            g_loss = self.model.generator_train_step(batch, g_backward)
 
         time_end = time.time()
 
         lr_g = self.optimizer_g.param_groups[0]['lr']
         lr_d = self.optimizer_d.param_groups[0]['lr']
-        it_s = imgs.size(0) / (time_end - time_start)
+        it_s = batch[0].size(0) / (time_end - time_start)
         metrics = {
             'g_loss': compute_item(g_loss), 'd_loss': compute_item(d_loss), 'lr_g': lr_g, 'lr_d': lr_d, 'its': it_s
         }
         return metrics
 
-    def backward(self, module: Literal['g', 'd'], loss: Sequence[torch.Tensor] | torch.Tensor, should_step: bool):
+    def backward(self, module: Literal['g', 'd'], loss: Sequence[torch.Tensor] | torch.Tensor, accum_idx: int = 0):
         accum_steps = self.configs.grad_accum_steps
+        is_last_accum_batch = (accum_idx + 1) % self.configs.grad_accum_steps == 0
+
         if accum_steps > 1:
             loss /= accum_steps
 
@@ -286,26 +288,15 @@ class Trainer:
         else:
             torch.autograd.backward(loss)
 
-        if should_step:
+        if is_last_accum_batch:
             if module == 'g':
-                self.model.before_generator_step()
-                optimizer = self.optimizer_g
-            else:
-                self.model.before_discriminator_step()
-                optimizer = self.optimizer_d
-
-            optimizer.step()
-            optimizer.zero_grad()
-
-            if module == 'g':
-                self.model.after_generator_step()
+                self.model.generator_optimizer_step(self.optimizer_g)
                 lr_scheduler = self.lr_scheduler_g
             else:
-                self.model.after_discriminator_step()
+                self.model.discriminator_optimizer_step(self.optimizer_d)
                 lr_scheduler = self.lr_scheduler_d
 
-            lr_scheduler.step(current_loss=compute_item(loss))
-
+            lr_scheduler.step(t=self.step, current_loss=compute_item(loss))
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
         data = self.load_dataset(data)

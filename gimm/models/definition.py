@@ -1,5 +1,5 @@
 from abc import abstractmethod, ABC
-from typing import Sequence, Optional
+from typing import Sequence, Optional, Callable
 
 import torch
 from torch import Tensor
@@ -103,26 +103,33 @@ class ModuleGAN(ABC, nn.Module):
         self._cached_generation = None
         return output
 
-    def before_generator_step(self):
-        """
-        Hook to be called before the generator optimizer.step()
-        """
-        pass
+    def generator_train_step(self, batch: tuple[Tensor, Tensor], backward: Callable[[Loss], None]) -> Loss:
+        # Freeze discriminator
+        for p in self.discriminator.parameters():
+            p.requires_grad = False
 
-    def after_generator_step(self):
-        """
-        Hook to be called after the generator optimizer.step()
-        """
-        pass
+        # Train generator
+        imgs, labels = batch
+        g_loss = self.compute_generator_loss(imgs)
+        backward(g_loss)
 
-    def before_discriminator_step(self):
-        """
-        Hook to be called before the discriminator optimizer.step()
-        """
-        pass
+        # Unfreeze discriminator
+        for p in self.discriminator.parameters():
+            p.requires_grad = True
 
-    def after_discriminator_step(self):
-        """
-        Hook to be called after the discriminator optimizer.step()
-        """
-        pass
+        return g_loss
+
+    def discriminator_train_step(self, batch: tuple[Tensor, Tensor], backward: Callable[[Loss], None]) -> Loss:
+        imgs, labels = batch
+        fake_imgs = self.get_previous_generated_samples(imgs)
+        d_loss = self.compute_discriminator_loss(imgs, fake_imgs)
+        backward(d_loss)
+        return d_loss
+
+    def generator_optimizer_step(self, optimizer: torch.optim.Optimizer):
+        optimizer.step()
+        optimizer.zero_grad()
+
+    def discriminator_optimizer_step(self, optimizer: torch.optim.Optimizer):
+        optimizer.step()
+        optimizer.zero_grad()
