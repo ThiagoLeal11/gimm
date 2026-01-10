@@ -68,6 +68,7 @@ class Dataset(ABC):
         self.prepare_data()
         self.dataset_train, self.dataset_val, self.dataset_test = None, None, None
         self._validation_applied = False
+        self._loaders = {}
 
     def _split_train_val(self, full_train_dataset):
         split = self.get_splits()  # format: [train_size, val_size, test_size]
@@ -128,10 +129,13 @@ class Dataset(ABC):
         self.transformations = v2.Compose(transformations + self.transformations.transforms)
 
     def train_dataloader(self):
+        if 'train' in self._loaders:
+            return self._loaders['train']
+
         if self.dataset_train is None:
             self.setup("train")
         
-        return DataLoader(
+        self._loaders['train'] = DataLoader(
             self.dataset_train,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
@@ -141,12 +145,16 @@ class Dataset(ABC):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
         )
+        return self._loaders['train']
 
     def validation_dataloader(self):
+        if 'val' in self._loaders:
+            return self._loaders['val']
+
         if self.dataset_val is None:
             self.setup("train")
 
-        return DataLoader(
+        self._loaders['val'] = DataLoader(
             self.dataset_val,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
@@ -155,12 +163,16 @@ class Dataset(ABC):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
         )
+        return self._loaders['val']
 
     def test_dataloader(self):
+        if 'test' in self._loaders:
+            return self._loaders['test']
+
         if self.dataset_test is None:
             self.setup("test")
 
-        return DataLoader(
+        self._loaders['test'] = DataLoader(
             self.dataset_test,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
@@ -169,3 +181,17 @@ class Dataset(ABC):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
         )
+        return self._loaders['test']
+
+    def shutdown(self):
+        """
+        Explicitly shutdown DataLoader workers to free file descriptors.
+        """
+        for key, loader in self._loaders.items():
+            if hasattr(loader, '_iterator') and loader._iterator is not None:
+                try:
+                    loader._iterator._shutdown_workers()
+                except Exception:
+                    pass
+            del loader
+        self._loaders.clear()

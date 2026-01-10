@@ -174,6 +174,8 @@ class Trainer:
             self.after_training()
         finally:
             self.finish_loggers()
+            if data is not None and hasattr(data, 'shutdown'):
+                data.shutdown()
 
     def train_loop(self, data: Optional[Dataset] = None):
         step = self.step
