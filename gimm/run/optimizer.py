@@ -1,3 +1,4 @@
+import dataclasses
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from typing import Tuple
@@ -16,6 +17,13 @@ class Optimizer(ABC):
         Constructs the optimizer with the given parameters.
         """
         raise NotImplementedError("Optimizer must implement the construct method.")
+
+    def state_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        for key, value in state_dict.items():
+            setattr(self, key, value)
 
 
 @dataclass
@@ -38,17 +46,6 @@ class Adam(Optimizer):
             amsgrad=self.ams_grad,
             fused=self.fused
         )
-
-    def __dict__(self):
-        return {
-            'name': self.name,
-            'lr': self.lr,
-            'betas': self.betas,
-            'eps': self.eps,
-            'weight_decay': self.weight_decay,
-            'ams_grad': self.ams_grad,
-            'fused': self.fused
-        }
 
 
 @dataclass
@@ -78,20 +75,6 @@ class SGD(Optimizer):
             fused=self.fused
         )
 
-    def __dict__(self):
-        return {
-            'name': self.name,
-            'lr': self.lr,
-            'momentum': self.momentum,
-            'dampening': self.dampening,
-            'weight_decay': self.weight_decay,
-            'nesterov': self.nesterov,
-            'maximize': self.maximize,
-            'foreach': self.foreach,
-            'differentiable': self.differentiable,
-            'fused': self.fused
-        }
-
 
 @dataclass
 class RMSprop(Optimizer):
@@ -119,17 +102,3 @@ class RMSprop(Optimizer):
             foreach=self.foreach,
             differentiable=self.differentiable
         )
-
-    def __dict__(self):
-        return {
-            'name': self.name,
-            'lr': self.lr,
-            'alpha': self.alpha,
-            'eps': self.eps,
-            'weight_decay': self.weight_decay,
-            'momentum': self.momentum,
-            'centered': self.centered,
-            'maximize': self.maximize,
-            'foreach': self.foreach,
-            'differentiable': self.differentiable
-        }

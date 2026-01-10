@@ -30,6 +30,8 @@ class Trainer:
 
         self.model = model
         self.device = configs.device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
@@ -47,7 +49,7 @@ class Trainer:
             model=self.model,
             optimizer_generator=self.optimizer_g,
             optimizer_discriminator=self.optimizer_d,
-            checkpoint_dir=configs.output_path + '/checkpoints/',
+            checkpoint_prefix=configs.output_path + '/checkpoints/checkpoint-',
             raise_if_dir_not_empty=not configs.resume_checkpoint,
             clean_checkpoint_dir=configs.delete_checkpoint,
         )
@@ -77,7 +79,13 @@ class Trainer:
         self.checkpoint.save(step=self.step)
 
     def resume_checkpoint(self, path: str):
-        self.step = self.checkpoint.load(path, should_resume_config=True)
+        self.step = self.checkpoint.load(
+            checkpoint_path=path,
+            should_resume_config=self.configs.checkpoint_resume_config,
+            weights_only=self.configs.checkpoint_weights_only
+        )
+        if self.configs.checkpoint_resume_config:
+            self.configs.__dict__.update(self.checkpoint.configs)
 
     def before_training(self, data: Dataset):
         self.model.to(self.device)
