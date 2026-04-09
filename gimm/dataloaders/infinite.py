@@ -1,6 +1,8 @@
 from typing import Generator
 import threading
 import queue
+import time
+import warnings
 
 import torch
 
@@ -18,14 +20,19 @@ class InfinitePrefetchLoader:
 
         self.is_infinite = infinite
         self.should_preload = preload
+        self._stall_warned = False
 
     def __iter__(self) -> Generator[BATCH, None, None]:
+        yield from self._iter()
+
+    def _iter(self) -> Generator[BATCH, None, None]:
         loader = self.dataloader
         if self.is_infinite:
             loader = self._infinite(loader)
 
         if self.should_preload:
-            loader = self._preload(loader)
+            preloaded_loader = self._preload(loader)
+            loader = self._detect_stalls(preloaded_loader)
         else:
             loader = map(self._to_device, loader)
 
@@ -80,3 +87,41 @@ class InfinitePrefetchLoader:
                     except queue.Empty:
                         break
                 producer_thread.join(timeout=5.0)
+
+    def _detect_stalls(self, dataloader: Generator[BATCH, None, None]) -> Generator[BATCH, None, None]:
+        ema_wait_time = None
+        ema_use_time = None
+        ema_alpha = 0.2
+        stall_ratio = 1.1
+        stall_patience = 3
+        stall_count = 0
+        use_time = None
+        wait_start = time.perf_counter()
+
+        for batch in dataloader:
+            wait_time = time.perf_counter() - wait_start
+
+            ema_wait_time = wait_time if ema_wait_time is None else (1 - ema_alpha) * ema_wait_time + ema_alpha * wait_time
+            if use_time is not None:
+                ema_use_time = use_time if ema_use_time is None else (1 - ema_alpha) * ema_use_time + ema_alpha * use_time
+
+            dataset_loader_stall = (
+                ema_use_time is not None
+                and ema_wait_time > ema_use_time * stall_ratio
+            )
+
+            stall_count = stall_count + 1 if dataset_loader_stall else 0
+            if stall_count >= stall_patience and not self._stall_warned:
+                warnings.warn(
+                    f"DataLoader appears to be waiting on CPU-side transforms: "
+                    f"Loading average wait={ema_wait_time:.3f}s, average usage time={ema_use_time:.3f}s. "
+                    f"Consider increasing the number of workers "
+                    f"or enabling `dataset_bake=True` to precompute deterministic transforms."
+                )
+                self._stall_warned = True
+
+            yielded_at = time.perf_counter()
+            yield batch
+            resumed_at = time.perf_counter()
+            use_time = resumed_at - yielded_at
+            wait_start = resumed_at
