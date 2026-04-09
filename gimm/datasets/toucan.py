@@ -36,5 +36,6 @@ class DatasetToucan(Dataset):
         pass  # No preparation needed for a single image dataset
 
     def setup(self, stage: str):
-        self.dataset_train = SingleImageDataset(transform=self.transformations)
-        self.dataset_test = SingleImageDataset(transform=self.transformations)
+        all_transforms = self.static_transforms + self.dynamic_transforms
+        self.dataset_train = SingleImageDataset(transform=all_transforms)
+        self.dataset_test = SingleImageDataset(transform=all_transforms)

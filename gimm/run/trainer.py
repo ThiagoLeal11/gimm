@@ -120,7 +120,7 @@ class Trainer:
         scale = max(target_h / orig_h, target_w / orig_w)
         new_size = (int(orig_h * scale), int(orig_w * scale))
 
-        dataset.update_transformations([
+        dataset.add_static_transforms([
             transforms.Resize(new_size, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.CenterCrop((target_h, target_w))
         ])
@@ -153,6 +153,9 @@ class Trainer:
             num_workers=cfg.num_workers,
             data_dir=cfg.dataset_dir,
             split_config=cfg.split_config,
+            bake=cfg.dataset_bake,
+            bake_type=cfg.dataset_bake_type,
+            bake_path=cfg.dataset_bake_path,
         )
 
         if self.configs.validation_policy == 'strict' and dataset.get_splits()[1] < cfg.validation_samples:

@@ -17,12 +17,10 @@ class DatasetPistachio1(Dataset):
         self.dims = (3, 32, 32)
         self.num_classes = 1
 
-        self.transformations = transforms.Compose(
-            [
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR),
-            ]
-        )
+        self.static_transforms = [
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR),
+        ]
 
     def prepare_data(self):
         _PISTACHIO_1(self.data_dir, download=True)
@@ -50,8 +48,9 @@ class DatasetPistachio1(Dataset):
         if not train_image_paths and not test_image_paths:
             raise FileNotFoundError(f"No valid images found in {image_folder_path}. Please check the dataset structure.")
 
-        self.dataset_train = PistachioImageDataset(image_paths=train_image_paths, transform=self.transformations)
-        self.dataset_test = PistachioImageDataset(image_paths=test_image_paths, transform=self.transformations)
+        self.dataset_train = PistachioImageDataset(image_paths=train_image_paths)
+        self.dataset_train = PistachioImageDataset(image_paths=train_image_paths)
+        self.dataset_test = PistachioImageDataset(image_paths=test_image_paths)
 
 
 def _PISTACHIO_1(path: str, download: bool = True):
@@ -128,9 +127,8 @@ def _PISTACHIO_1(path: str, download: bool = True):
 
 # Coloque esta classe antes da definição de DatasetPistachio1
 class PistachioImageDataset(TorchDataset):
-    def __init__(self, image_paths: List[str], transform=None):
+    def __init__(self, image_paths: List[str]):
         self.image_paths = image_paths
-        self.transform = transform
         # Como self.num_classes = 1 para DatasetPistachio1, o label será sempre 0.
 
     def __len__(self):
@@ -144,9 +142,6 @@ class PistachioImageDataset(TorchDataset):
             raise FileNotFoundError(f"Arquivo de imagem não encontrado: {img_path}")
         except Exception as e:
             raise RuntimeError(f"Erro ao carregar a imagem {img_path}: {e}")
-
-        if self.transform:
-            image = self.transform(image)
 
         # Label único (0) para a classe Kirmizi_Pistachio, pois num_classes = 1
         label = 0

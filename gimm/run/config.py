@@ -99,6 +99,9 @@ class TrainerConfig:
     dataset_dir: Optional[str] = '.'
     # 'auto': warns on rescaling; 'strict': error if resolution differs; 'silent': rescale without warning.
     dataset_scale_policy: Literal['auto', 'strict', 'silent'] = 'auto'
+    dataset_bake: bool = False
+    dataset_bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory'
+    dataset_bake_path: Optional[str] = 'output/baked_dataset/'
 
     device: Optional[torch.device] = None
 

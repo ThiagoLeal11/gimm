@@ -3,12 +3,24 @@ from typing import Optional
 from gimm.datasets.definition import Dataset
 
 
-def dataset_loader(name: str, batch_size: int, num_workers: int, data_dir: str, split_config: Optional[list[int]] = None) -> Dataset:
+def dataset_loader(
+        name: str,
+        batch_size: int,
+        num_workers: int,
+        data_dir: str,
+        split_config: Optional[list[int]] = None,
+        bake: bool = False,
+        bake_type: str = 'memory',
+        bake_path: Optional[str] = None,
+) -> Dataset:
     kwargs = {
         'batch_size': batch_size,
         'num_workers': num_workers,
         'data_dir': data_dir,
         'split_config': split_config,
+        'bake': bake,
+        'bake_type': bake_type,
+        'bake_path': bake_path,
     }
 
     if name == "cifar10":
@@ -20,6 +32,9 @@ def dataset_loader(name: str, batch_size: int, num_workers: int, data_dir: str, 
     elif name == "pistachio2":
         from gimm.datasets.pistachio import DatasetPistachio1
         return DatasetPistachio1(**kwargs)
+    elif name == "celeba":
+        from gimm.datasets.celeba import DatasetCelebA
+        return DatasetCelebA(**kwargs)
     elif name == "toucan":
         from gimm.datasets.toucan import DatasetToucan
         return DatasetToucan(**kwargs)
