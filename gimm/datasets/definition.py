@@ -16,22 +16,22 @@ from torchvision.transforms import v2
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from gimm.datasets.memory import MemoryDataset
-    from gimm.datasets.lmdb import LMDBDataset
-    from gimm.datasets.folder import FolderDataset
+    from gimm.datasets.generic.memory import MemoryDataset
+    from gimm.datasets.generic.lmdb import LMDBDataset
+    from gimm.datasets.generic.folder import FolderDataset
 
 Split = Literal['train', 'val', 'test']
 
 @lru_cache(maxsize=None)
 def _load_bake_dataset_class(bake_type: str) -> type["MemoryDataset"] | type["LMDBDataset"] | type["FolderDataset"]:
     if bake_type == 'memory':
-        from gimm.datasets.memory import MemoryDataset
+        from gimm.datasets.generic.memory import MemoryDataset
         return MemoryDataset
     if bake_type == 'lmdb':
-        from gimm.datasets.lmdb import LMDBDataset
+        from gimm.datasets.generic.lmdb import LMDBDataset
         return LMDBDataset
     if bake_type == 'folder':
-        from gimm.datasets.folder import FolderDataset
+        from gimm.datasets.generic.folder import FolderDataset
         return FolderDataset
 
     raise ValueError(f"The dataset container type for baking ({bake_type}) is not supported. Valid ones are: `memory`, `lmdb` and `folder`.")

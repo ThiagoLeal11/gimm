@@ -24,19 +24,19 @@ def dataset_loader(
     }
 
     if name == "cifar10":
-        from gimm.datasets.cifar10 import DatasetCifar10
+        from gimm.datasets.benchmark.cifar10 import DatasetCifar10
         return DatasetCifar10(**kwargs)
     elif name == "mnist":
-        from gimm.datasets.mnist import DatasetMNIST
+        from gimm.datasets.benchmark.mnist import DatasetMNIST
         return DatasetMNIST(**kwargs)
-    elif name == "pistachio2":
-        from gimm.datasets.pistachio import DatasetPistachio1
-        return DatasetPistachio1(**kwargs)
     elif name == "celeba":
-        from gimm.datasets.celeba import DatasetCelebA
+        from gimm.datasets.benchmark.celeba import DatasetCelebA
         return DatasetCelebA(**kwargs)
+    elif name == "pistachio2":
+        from gimm.datasets.debug.pistachio import DatasetPistachio1
+        return DatasetPistachio1(**kwargs)
     elif name == "toucan":
-        from gimm.datasets.toucan import DatasetToucan
+        from gimm.datasets.debug.toucan import DatasetToucan
         return DatasetToucan(**kwargs)
     else:
         raise ValueError(f"Dataset {name} not found.")
