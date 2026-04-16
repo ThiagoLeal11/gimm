@@ -6,6 +6,9 @@ from torch import Tensor
 from torch import nn
 
 
+DEFAULT_NET = 'default'
+
+
 Size = Sequence[int]
 SampleTensor = Tensor
 Loss = Tensor
@@ -13,17 +16,45 @@ Logits = Tensor
 
 
 class ModuleGAN(ABC, nn.Module):
-    generator: nn.Module
-    discriminator: nn.Module
+    generators: nn.ModuleDict
+    discriminators: nn.ModuleDict
     in_features: Size
 
     current_step: int
     _cached_generation: Optional[SampleTensor]
 
+    @property
+    def generator(self) -> nn.Module:
+        if len(self.generators) == 1:
+            return next(iter(self.generators.values()))
+
+        raise RuntimeError(
+            "More than one generator found in the architecture. "
+            "You will need to override some functions for this custom architecture"
+        )
+
+    @property
+    def discriminator(self) -> nn.Module:
+        if len(self.discriminators) == 1:
+            return next(iter(self.discriminators.values()))
+
+        raise RuntimeError(
+            "More than one discriminator found in the architecture. "
+            "You will need to override some functions for this custom architecture"
+        )
+
+    def set_generator(self, gen: nn.Module):
+        self.generators[DEFAULT_NET] = gen
+
+    def set_discriminator(self, disc: nn.Module):
+        self.discriminators[DEFAULT_NET] = disc
+
     def __init__(self):
         super(ModuleGAN, self).__init__()
         self.current_step = 0
         self._cached_generation = None
+        self.generators = nn.ModuleDict()
+        self.discriminators = nn.ModuleDict()
 
     def forward(self, latent: Tensor) -> SampleTensor:
         return self.generate(latent)
@@ -105,8 +136,9 @@ class ModuleGAN(ABC, nn.Module):
 
     def generator_train_step(self, batch: tuple[Tensor, Tensor], backward: Callable[[Loss], None]) -> Loss:
         # Freeze discriminator
-        for p in self.discriminator.parameters():
-            p.requires_grad = False
+        for d in self.discriminators.values():
+            for p in d.parameters():
+                p.requires_grad = False
 
         # Train generator
         imgs, labels = batch
@@ -114,8 +146,9 @@ class ModuleGAN(ABC, nn.Module):
         backward(g_loss)
 
         # Unfreeze discriminator
-        for p in self.discriminator.parameters():
-            p.requires_grad = True
+        for d in self.discriminators.values():
+            for p in d.parameters():
+                p.requires_grad = True
 
         return g_loss
 
@@ -126,10 +159,22 @@ class ModuleGAN(ABC, nn.Module):
         backward(d_loss)
         return d_loss
 
-    def generator_optimizer_step(self, optimizer: torch.optim.Optimizer):
-        optimizer.step()
-        optimizer.zero_grad()
+    def generator_optimizer_step(self, optimizers: dict[str, torch.optim.Optimizer]):
+        for opt in optimizers.values():
+            opt.step()
+            opt.zero_grad()
 
-    def discriminator_optimizer_step(self, optimizer: torch.optim.Optimizer):
-        optimizer.step()
-        optimizer.zero_grad()
+    def discriminator_optimizer_step(self, optimizers: dict[str, torch.optim.Optimizer]):
+        for opt in optimizers.values():
+            opt.step()
+            opt.zero_grad()
+
+    def log_generator_loss(self, tensors: Sequence[Loss] | Loss) -> dict[str, float]:
+        if isinstance(tensors, Tensor):
+            return {'g_loss': tensors.item()}
+        return {f'g_loss_{i}': loss.item() for i, loss in enumerate(tensors)}
+
+    def log_discriminator_loss(self, tensors: Sequence[Loss] | Loss) -> dict[str, float]:
+        if isinstance(tensors, Tensor):
+            return {'d_loss': tensors.item()}
+        return {f'd_loss_{i}': loss.item() for i, loss in enumerate(tensors)}

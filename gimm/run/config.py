@@ -80,12 +80,12 @@ class TrainerConfig:
     images_to_log: int = 128
 
     # Optimizers
-    g_optimizer: Optimizer = None
-    d_optimizer: Optimizer = None
+    g_optimizer: Optimizer | dict[str, Optimizer] = None
+    d_optimizer: Optimizer | dict[str, Optimizer] = None
 
     # Schedulers
-    g_scheduler: Scheduler = None
-    d_scheduler: Scheduler = None
+    g_scheduler: Scheduler | dict[str, Scheduler] = None
+    d_scheduler: Scheduler | dict[str, Scheduler] = None
 
     # Checkpoint
     output_path: str = "output"

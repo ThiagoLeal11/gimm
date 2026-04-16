@@ -1,3 +1,4 @@
+import copy
 from abc import ABC, abstractmethod
 
 import torch.optim
@@ -33,13 +34,14 @@ class Scheduler(ABC):
         self.current_loss = 0.0
 
     def construct(self, optimizer: torch.optim.Optimizer) -> 'Scheduler':
-        self.optimizer = optimizer
+        new_scheduler = copy.deepcopy(self)
+        new_scheduler.optimizer = optimizer
 
-        self.base_lrs = [
+        new_scheduler.base_lrs = [
             group.get(self.initial_param_name) or group.get(self.param_name)
-            for group in self.optimizer.param_groups
+            for group in new_scheduler.optimizer.param_groups
         ]
-        return self
+        return new_scheduler
 
     def state_dict(self) -> dict[str, any]:
         return {

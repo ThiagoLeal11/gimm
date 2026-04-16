@@ -10,8 +10,8 @@ from gimm.models.definition import ModuleGAN
 class Checkpoint:
     def __init__(self,
         model: ModuleGAN,
-        optimizer_generator: torch.optim.Optimizer,
-        optimizer_discriminator: torch.optim.Optimizer,
+        optimizer_generator: torch.optim.Optimizer | dict[str, torch.optim.Optimizer],
+        optimizer_discriminator: torch.optim.Optimizer | dict[str, torch.optim.Optimizer],
         args: dict = None,
         configs: dict = None,
         checkpoint_prefix: str = 'checkpoint-',
@@ -49,8 +49,8 @@ class Checkpoint:
             'args': self.args,
             'configs': self.configs,
             'model_state_dict': unwrap_model(self.model).state_dict(),
-            'optimizer_g': self.optimizer_generator.state_dict(),
-            'optimizer_d': self.optimizer_discriminator.state_dict(),
+            'optimizer_g': self._get_optimizer_state(self.optimizer_generator),
+            'optimizer_d': self._get_optimizer_state(self.optimizer_discriminator),
         }
         torch.save(state, save_path)
 
@@ -85,8 +85,8 @@ class Checkpoint:
         self.model.load_state_dict(checkpoint['model_state_dict'])
 
         if not weights_only:
-            self.optimizer_generator.load_state_dict(checkpoint['optimizer_g'])
-            self.optimizer_discriminator.load_state_dict(checkpoint['optimizer_d'])
+            self._load_optimizer_state(self.optimizer_generator, checkpoint['optimizer_g'])
+            self._load_optimizer_state(self.optimizer_discriminator, checkpoint['optimizer_d'])
 
         configs = checkpoint.get('configs', {})
         if should_resume_config:
@@ -99,6 +99,18 @@ class Checkpoint:
                 raise ValueError(f"Restored batch size {restored_full_batch_size} is not compatible with the current batch size {full_batch_size}. Please set resume_config to True, or change the batch_size or grad_accum_steps in the current config.")
 
         return checkpoint['step']
+
+    def _get_optimizer_state(self, optimizer):
+        if isinstance(optimizer, dict):
+            return {k: v.state_dict() for k, v in optimizer.items()}
+        return optimizer.state_dict()
+
+    def _load_optimizer_state(self, optimizer, state):
+        if isinstance(optimizer, dict):
+            for k, v in optimizer.items():
+                v.load_state_dict(state[k])
+        else:
+            optimizer.load_state_dict(state)
 
 
 def unwrap_model(model):

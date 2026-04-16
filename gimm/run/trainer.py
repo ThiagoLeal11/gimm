@@ -11,10 +11,12 @@ from gimm.datasets.definition import Dataset
 from gimm.dataloaders.infinite import InfinitePrefetchLoader
 from gimm.dataloaders.eval import ValidationLoader
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
-from gimm.logs.log import Logger, get_wandb_run_id, LoggerWandb
+from gimm.logs.log import Logger, get_wandb_run_id
 from gimm.models.definition import ModuleGAN
 from gimm.run.config import TrainerConfig
 from gimm.run.loader import dataset_loader
+from gimm.run.optimizer import Optimizer
+from gimm.scheduler.scheduler import Scheduler
 
 
 def custom_format_warning(message, category, filename, lineno, line=None):
@@ -35,10 +37,11 @@ class Trainer:
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
-        self.optimizer_g = self.configs.g_optimizer.construct(self.model.generator.parameters())
-        self.optimizer_d = self.configs.d_optimizer.construct(self.model.discriminator.parameters())
-        self.lr_scheduler_g = self.configs.g_scheduler.construct(optimizer=self.optimizer_g)
-        self.lr_scheduler_d = self.configs.d_scheduler.construct(optimizer=self.optimizer_d)
+        self.optimizers_g = self.create_optimizers(self.configs.g_optimizer, self.model.generators)
+        self.optimizers_d = self.create_optimizers(self.configs.d_optimizer, self.model.discriminators)
+
+        self.lr_schedulers_g = self.create_schedulers(self.configs.g_scheduler, self.optimizers_g)
+        self.lr_schedulers_d = self.create_schedulers(self.configs.d_scheduler, self.optimizers_d)
 
         self.checkpoint = Checkpoint(
             configs=configs.__dict__,
@@ -47,8 +50,8 @@ class Trainer:
                 'fixed_z': self.fixed_z,
             },
             model=self.model,
-            optimizer_generator=self.optimizer_g,
-            optimizer_discriminator=self.optimizer_d,
+            optimizer_generator=self.optimizers_g,
+            optimizer_discriminator=self.optimizers_d,
             checkpoint_prefix=configs.output_path + '/checkpoints/checkpoint-',
             raise_if_dir_not_empty=not configs.resume_checkpoint,
             clean_checkpoint_dir=configs.delete_checkpoint,
@@ -87,17 +90,49 @@ class Trainer:
         if self.configs.checkpoint_resume_config:
             self.configs.__dict__.update(self.checkpoint.configs)
 
+    @staticmethod
+    def create_optimizers(config_opt: Optimizer | dict[str, Optimizer], networks: torch.nn.ModuleDict) -> dict[str, torch.optim.Optimizer]:
+        # Single config for all networks
+        if not isinstance(config_opt, dict):
+            return {
+                name: config_opt.construct(net.parameters())
+                for name, net in networks.items()
+            }
+
+        # Create an optimizer for each network
+        optimizers = {}
+        for name, opt_conf in config_opt.items():
+            if name in networks:
+                optimizers[name] = opt_conf.construct(networks[name].parameters())
+        return optimizers
+
+    @staticmethod
+    def create_schedulers(config_sch: Scheduler | dict[str, Scheduler], optimizers: dict[str, torch.optim.Optimizer]):
+        # Single config for all networks
+        if not isinstance(config_sch, dict):
+            return {
+                name: config_sch.construct(optimizer=opt)
+                for name, opt in optimizers.items()
+            }
+
+        # Create a scheduler for each network
+        schedulers = {}
+        for name, sch_conf in config_sch.items():
+            if name in optimizers:
+                schedulers[name] = sch_conf.construct(optimizer=optimizers[name])
+        return schedulers
+
     def before_training(self, data: Dataset):
         self.model.to(self.device)
+
+    def after_training(self):
+        self.save_checkpoint()
 
     def before_evaluate(self, data: Dataset):
         self.model.to(self.device)
 
     def after_evaluate(self):
         pass
-
-    def after_training(self):
-        self.save_checkpoint()
 
     @staticmethod
     def scale_dataset_to_model(dataset: Dataset, model_in_features: Sequence[int], scale_policy: Literal['auto', 'strict', 'silent'] = 'auto') -> Dataset:
@@ -169,8 +204,10 @@ class Trainer:
             self.before_training(data)
             self.model.train()
 
-            self.optimizer_g.zero_grad()
-            self.optimizer_d.zero_grad()
+            for opt_g in self.optimizers_g.values():
+                opt_g.zero_grad()
+            for opt_d in self.optimizers_d.values():
+                opt_d.zero_grad()
 
             self.train_loop(data)
 
@@ -281,11 +318,21 @@ class Trainer:
 
         time_end = time.time()
 
-        lr_g = self.optimizer_g.param_groups[0]['lr']
-        lr_d = self.optimizer_d.param_groups[0]['lr']
+        lrs_g = {
+            f'lr_g_{k}' if len(self.optimizers_g) > 1 else 'lr_g': v.param_groups[0]['lr']
+            for k, v in self.optimizers_g.items()
+        }
+        lrs_d = {
+            f'lr_d_{k}' if len(self.optimizers_d) > 1 else 'lr_d': v.param_groups[0]['lr']
+            for k, v in self.optimizers_d.items()
+        }
         it_s = batch[0].size(0) / (time_end - time_start)
         metrics = {
-            'g_loss': compute_item(g_loss), 'd_loss': compute_item(d_loss), 'lr_g': lr_g, 'lr_d': lr_d, 'its': it_s
+            **self.model.log_generator_loss(g_loss),
+            **self.model.log_discriminator_loss(d_loss),
+            **lrs_g,
+            **lrs_d,
+            'its': it_s
         }
         return metrics
 
@@ -303,13 +350,14 @@ class Trainer:
 
         if is_last_accum_batch:
             if module == 'g':
-                self.model.generator_optimizer_step(self.optimizer_g)
-                lr_scheduler = self.lr_scheduler_g
+                self.model.generator_optimizer_step(self.optimizers_g)
+                lr_schedulers = self.lr_schedulers_g
             else:
-                self.model.discriminator_optimizer_step(self.optimizer_d)
-                lr_scheduler = self.lr_scheduler_d
+                self.model.discriminator_optimizer_step(self.optimizers_d)
+                lr_schedulers = self.lr_schedulers_d
 
-            lr_scheduler.step(t=self.step, current_loss=compute_item(loss))
+            for lrs in lr_schedulers.values():
+                lrs.step(t=self.step, current_loss=compute_item(loss))
 
     def evaluate(self, data: Optional[Dataset] = None) -> dict:
         data = self.load_dataset(data)
