@@ -78,8 +78,6 @@ class Dataset(ABC):
         self.prefetch_factor = prefetch_factor
         self.persistent_workers = persistent_workers
 
-        torch.manual_seed(self.seed)
-
         self.dims: Sequence[int] = []
         self.num_classes: Optional[int] = None
         self.static_transforms = list(static_transforms) if static_transforms else []
@@ -220,7 +218,12 @@ class Dataset(ABC):
 
         return collate_fn
 
-    def build_dataloader(self, split: Split) -> DataLoader:
+    def _generator(self) -> torch.Generator:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        return generator
+
+    def build_dataloader(self, split: Split, *, shuffle: Optional[bool] = None) -> DataLoader:
         dataset = self.get_dataset(split)
         assert dataset is not None
 
@@ -232,12 +235,13 @@ class Dataset(ABC):
             dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers, #if not for_baking else 0,
-            shuffle=self.shuffle,
+            shuffle=self.shuffle if shuffle is None else shuffle,
             pin_memory=bool(self.pin_memory_device),
             pin_memory_device=self.pin_memory_device,
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
             collate_fn=self._build_collate_fn(transforms),
+            generator=self._generator(),
         )
 
     def _create_baked_dataset(self, *, split: Literal['train', 'val', 'test']) -> 'Dataset':
@@ -249,6 +253,12 @@ class Dataset(ABC):
             num_classes=self.num_classes,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            seed=self.seed,
+            shuffle=self.shuffle,
+            incremental_shuffle=self.incremental_shuffle,
+            prefetch_factor=self.prefetch_factor,
+            pin_memory_device=torch.device(self.pin_memory_device or 'cpu'),
+            persistent_workers=self.persistent_workers,
             dynamic_transforms=self.dynamic_transforms,
         )
         return dataset
@@ -291,7 +301,8 @@ class Dataset(ABC):
         if self.get_dataset(split) is None:
             self.setup('test' if split == 'test' else 'train')
 
-        loader = self.build_dataloader(split)
+        initial_shuffle = self.shuffle if not self.bake else False
+        loader = self.build_dataloader(split, shuffle=initial_shuffle)
         # Bake the dataset if needed
         if self.bake and self.static_transforms:
             print(f"Preparing baked dataset for '{split}' using {self.bake_type} backend...")
