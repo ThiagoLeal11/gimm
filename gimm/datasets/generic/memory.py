@@ -3,8 +3,6 @@ from typing import Callable, Iterable, Optional, Sequence, cast
 
 import torch
 from torch.utils.data import Dataset as TorchDataset
-from torchvision.transforms import v2
-
 from gimm.datasets.definition import Dataset
 
 
@@ -16,6 +14,12 @@ class MemoryDataset(Dataset):
             num_classes: int,
             batch_size: int = 1,
             num_workers: int = 0,
+            seed: int = 42,
+            shuffle: bool = True,
+            incremental_shuffle: bool = True,
+            prefetch_factor: int = 1,
+            pin_memory_device: torch.device = 'cpu',
+            persistent_workers: bool = True,
             dynamic_transforms: Optional[Sequence[Callable]] = None,
     ):
         self.path = Path(path)
@@ -27,6 +31,12 @@ class MemoryDataset(Dataset):
             batch_size=batch_size,
             num_workers=num_workers,
             data_dir=str(self.path),
+            seed=seed,
+            shuffle=shuffle,
+            incremental_shuffle=incremental_shuffle,
+            prefetch_factor=prefetch_factor,
+            pin_memory_device=pin_memory_device,
+            persistent_workers=persistent_workers,
             static_transforms=[],
             dynamic_transforms=dynamic_transforms,
             bake=False,
