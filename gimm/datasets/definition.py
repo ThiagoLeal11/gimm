@@ -12,18 +12,11 @@ from torch.utils.data import DataLoader, Dataset as TorchDataset, default_collat
 from tqdm.auto import tqdm
 from torchvision.transforms import v2
 
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from gimm.datasets.generic.memory import MemoryDataset
-    from gimm.datasets.generic.lmdb import LMDBDataset
-    from gimm.datasets.generic.folder import FolderDataset
-
 Split = Literal['train', 'val', 'test']
+Batch = tuple[torch.Tensor, torch.Tensor]
 
 @lru_cache(maxsize=None)
-def _load_bake_dataset_class(bake_type: str) -> type["MemoryDataset"] | type["LMDBDataset"] | type["FolderDataset"]:
+def _load_bake_dataset_class(bake_type: str) -> type["Dataset"]:
     if bake_type == 'memory':
         from gimm.datasets.generic.memory import MemoryDataset
         return MemoryDataset
@@ -47,13 +40,13 @@ class Dataset(ABC):
         dataset_name: Optional[str] = None,
         seed: int = 42,
         shuffle: bool = True,
-        # Reshuffle the dataset at each epoch using the seed + 1
-        incremental_shuffle: bool = True,
         prefetch_factor: int = 1,
         pin_memory_device: torch.device = 'cpu',
         persistent_workers: bool = True,
         static_transforms: Optional[list[Callable]] = None,
         dynamic_transforms: Optional[list[Callable]] = None,
+        dims: Optional[Sequence[int]]  = None,
+        num_classes: Optional[int] = None,
         bake: bool = False,
         bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory',
         bake_path: Optional[str] = None,
@@ -73,13 +66,12 @@ class Dataset(ABC):
         self.num_workers = num_workers
         self.seed = seed
         self.shuffle = shuffle
-        self.incremental_shuffle = incremental_shuffle
         self.pin_memory_device: str = str(pin_memory_device) if str(pin_memory_device).lower() != 'cpu' else ""
         self.prefetch_factor = prefetch_factor
         self.persistent_workers = persistent_workers
 
-        self.dims: Sequence[int] = []
-        self.num_classes: Optional[int] = None
+        self.dims: Sequence[int] = dims or []
+        self.num_classes: Optional[int] = num_classes
         self.static_transforms = list(static_transforms) if static_transforms else []
         self.dynamic_transforms = list(dynamic_transforms) if dynamic_transforms else []
         self.bake = bake
@@ -159,7 +151,7 @@ class Dataset(ABC):
     def prepare_data(self):
         pass
 
-    def populate(self, dataloader: Iterable[tuple[torch.Tensor, torch.Tensor]]):
+    def populate(self, dataloader: Iterable[Batch], *, split: Split):
         raise NotImplementedError
 
     @abstractmethod
@@ -244,22 +236,22 @@ class Dataset(ABC):
             generator=self._generator(),
         )
 
-    def _create_baked_dataset(self, *, split: Literal['train', 'val', 'test']) -> 'Dataset':
-        bake_path = self._resolve_bake_path(split)
+    def _create_baked_dataset(self) -> 'Dataset':
         backend_cls = _load_bake_dataset_class(self.bake_type)
         dataset = backend_cls(
-            path=bake_path,
             dims=self.dims,
             num_classes=self.num_classes,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             seed=self.seed,
             shuffle=self.shuffle,
-            incremental_shuffle=self.incremental_shuffle,
             prefetch_factor=self.prefetch_factor,
             pin_memory_device=torch.device(self.pin_memory_device or 'cpu'),
             persistent_workers=self.persistent_workers,
             dynamic_transforms=self.dynamic_transforms,
+            bake=False,
+            bake_type=self.bake_type,
+            bake_path=self.bake_path
         )
         return dataset
 
@@ -280,14 +272,14 @@ class Dataset(ABC):
         self.dynamic_transforms = self.dynamic_transforms + transformations
 
     def _build_baked_loader(self, split: Literal['train', 'val', 'test'], loader: DataLoader) -> DataLoader:
-        baked_dataset = self._create_baked_dataset(split=split)
+        baked_dataset = self._create_baked_dataset()
         progress_loader = tqdm(
             loader,
             total=len(loader),
             desc=f'Baking {self.dataset_name} {split}',
             leave=False,
         )
-        baked_dataset.populate(progress_loader)
+        baked_dataset.populate(progress_loader, split=split)
 
         self.set_baked(split, baked_dataset)
         return baked_dataset.build_dataloader(split)
