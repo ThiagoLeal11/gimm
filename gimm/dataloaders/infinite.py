@@ -94,18 +94,23 @@ class InfinitePrefetchLoader:
         ema_alpha = 0.2
         stall_ratio = 1.1
         stall_patience = 3
+        warmup_batches = 24
         stall_count = 0
         use_time = None
         wait_start = time.perf_counter()
+        batches_seen = 0
 
         for batch in dataloader:
+            batches_seen += 1
             wait_time = time.perf_counter() - wait_start
 
-            ema_wait_time = wait_time if ema_wait_time is None else (1 - ema_alpha) * ema_wait_time + ema_alpha * wait_time
-            if use_time is not None:
+            if batches_seen > warmup_batches:
+                ema_wait_time = wait_time if ema_wait_time is None else (1 - ema_alpha) * ema_wait_time + ema_alpha * wait_time
                 ema_use_time = use_time if ema_use_time is None else (1 - ema_alpha) * ema_use_time + ema_alpha * use_time
 
             dataset_loader_stall = (
+                batches_seen > warmup_batches
+                and
                 ema_use_time is not None
                 and ema_wait_time > ema_use_time * stall_ratio
             )
