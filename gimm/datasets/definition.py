@@ -77,7 +77,11 @@ class Dataset(ABC):
         self.bake = bake
         self.bake_type = bake_type
         self.bake_path = bake_path
+        self._buffer: dict[str, Any] = {}
         self.definitions()
+
+        if self.bake_path not in (None, ''):
+            assert pathlib.Path(self.data_dir) != pathlib.Path(self.bake_path), "Baked path root must be different from data_dir root to avoid accidental data loss."
 
         assert self.dims, "Dataset dimensions must be defined in definitions() method."
         assert self.classes, "Dataset classes must be defined in definitions() method."
@@ -141,8 +145,14 @@ class Dataset(ABC):
     def get_splits(self) -> Sequence[int] | None:
         return self.split
 
+    def get_num_classes(self) -> int:
+        return len(self.classes)
+
     def get_dataset(self, split: Split):
         return getattr(self, f"dataset_{split}")
+
+    def set_dataset(self, split: Split, dataset: TorchDataset):
+        setattr(self, f"dataset_{split}", dataset)
 
     def set_baked(self, split: Split, dataset: TorchDataset):
         setattr(self, f"baked_{split}", dataset)
@@ -239,7 +249,7 @@ class Dataset(ABC):
             generator=self._generator(),
         )
 
-    def _create_baked_dataset(self) -> 'Dataset':
+    def _create_baked_dataset(self, split: Split) -> 'Dataset':
         backend_cls = _load_bake_dataset_class(self.bake_type)
         dataset = backend_cls(
             dims=self.dims,
@@ -252,9 +262,7 @@ class Dataset(ABC):
             pin_memory_device=torch.device(self.pin_memory_device or 'cpu'),
             persistent_workers=self.persistent_workers,
             dynamic_transforms=self.dynamic_transforms,
-            bake=False,
-            bake_type=self.bake_type,
-            bake_path=self.bake_path
+            data_dir=str(pathlib.Path(self.bake_path) / split),
         )
         return dataset
 
@@ -274,8 +282,8 @@ class Dataset(ABC):
         assert datasets_not_initialized, "Cannot update transformations after datasets have been initialized."
         self.dynamic_transforms = self.dynamic_transforms + transformations
 
-    def _build_baked_loader(self, split: Literal['train', 'val', 'test'], loader: DataLoader) -> DataLoader:
-        baked_dataset = self._create_baked_dataset()
+    def _build_baked_loader(self, split: Split, loader: DataLoader) -> DataLoader:
+        baked_dataset = self._create_baked_dataset(split)
         progress_loader = tqdm(
             loader,
             total=len(loader),
@@ -287,7 +295,7 @@ class Dataset(ABC):
         self.set_baked(split, baked_dataset)
         return baked_dataset.build_dataloader(split)
 
-    def _get_or_create_loader(self, split: Literal['train', 'val', 'test']) -> DataLoader:
+    def _get_or_create_loader(self, split: Split) -> DataLoader:
         # Reusing existing dataloader
         if split in self._loaders:
             return self._loaders[split]
@@ -302,6 +310,7 @@ class Dataset(ABC):
         if self.bake and self.static_transforms:
             print(f"Preparing baked dataset for '{split}' using {self.bake_type} backend...")
             loader = self._build_baked_loader(split, loader)
+            print(f"Baked dataset for '{split}' is done!")
 
         self._loaders[split] = loader
         return loader
