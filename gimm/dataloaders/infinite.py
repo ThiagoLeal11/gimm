@@ -41,10 +41,31 @@ class InfinitePrefetchLoader:
 
     def _infinite(self, dataloader: DL) -> Generator[BATCH, None, None]:
         while True:
+            batches_seen = 0
+            full_batches_seen = 0
+            last_batch_size = None
             for (imgs, labels) in dataloader:
+                batches_seen += 1
+                last_batch_size = imgs.size(0)
                 # Discard the last batch if it is not a full batch
                 if imgs.size(0) == self.batch_size:
+                    full_batches_seen += 1
                     yield imgs, labels
+
+            if batches_seen == 0:
+                raise ValueError(
+                    "InfinitePrefetchLoader received an empty dataloader and cannot yield batches. "
+                    "Check whether the dataset or selected split contains any samples."
+                )
+
+            if full_batches_seen == 0:
+                raise ValueError(
+                    "InfinitePrefetchLoader could not produce a full batch. "
+                    f"Expected batch_size={self.batch_size}, but largest observed batch had size {last_batch_size}. "
+                    "This usually means the training split is smaller than batch_size (or batch_size * grad_accum_steps). "
+                    "Reduce batch_size, reduce grad_accum_steps, or increase the number of training samples in the split."
+                )
+
             self.epoch += 1
 
     def _to_device(self, batch: BATCH) -> BATCH:
