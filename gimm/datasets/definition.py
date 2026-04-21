@@ -5,7 +5,7 @@ import json
 import logging
 import pathlib
 import tempfile
-from typing import Callable, Iterable, Literal, Optional, Sequence
+from typing import Callable, Iterable, Literal, Optional, Sequence, Sized, cast, Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset as TorchDataset, default_collate, random_split
@@ -110,21 +110,45 @@ class Dataset(ABC):
         self._baked_dataset_val: Optional[TorchDataset] = None
         self._baked_dataset_test: Optional[TorchDataset] = None
 
-    def _split_train_val(self, full_train_dataset):
-        split = self.get_splits()  # format: [train_size, val_size, test_size]
-        train_size, val_size = split[:2]
-        full_len = len(full_train_dataset)
+    @staticmethod
+    def _compute_split(full_dataset, split: Sequence[int | float]) -> list[int]:
+        full_len = len(full_dataset)
+        split_sizes = list(split)
+        unknown_count = split_sizes.count(-1)
 
-        if train_size == -1:
-            train_size = full_len - val_size
-        elif val_size == -1:
-            val_size = full_len - train_size
+        if any(isinstance(size, float) for size in split_sizes):
+            if unknown_count:
+                raise ValueError("Percentage split cannot contain -1 values.")
 
-        if train_size + val_size != full_len:
-             raise ValueError(f"Split sizes {train_size} + {val_size} do not match dataset length {full_len}")
+            total = float(sum(split_sizes))
+            if abs(total - 1.0) > 1e-8:
+                raise ValueError(f"Percentage split must sum to 1.0, got {total}")
 
+            if any(size < 0 for size in split_sizes):
+                raise ValueError("Split values must be non-negative.")
+
+            split_sizes = [int(full_len * float(size)) for size in split_sizes[:-1]]
+            split_sizes.append(full_len - sum(split_sizes))
+
+        if unknown_count > 1:
+            raise ValueError("Split can contain at most one -1 value.")
+
+        if unknown_count == 1:
+            known_total = sum(size for size in split_sizes if size != -1)
+            missing_size = full_len - known_total
+            if missing_size < 0:
+                raise ValueError(f"Split sizes {split_sizes} exceed dataset length {full_len}")
+            split_sizes[split_sizes.index(-1)] = missing_size
+
+        if sum(split_sizes) != full_len:
+            raise ValueError(f"Split sizes {split_sizes} do not match dataset length {full_len}")
+
+        return split_sizes
+
+    def _split_dataset(self, full_dataset, split: Sequence[int | float]):
+        split_sizes = self._compute_split(full_dataset, split)
         datasets = random_split(
-            full_train_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(self.seed)
+            full_dataset, split_sizes, generator=self._generator()
         )
 
         self._verify_split_sizes()
@@ -135,12 +159,16 @@ class Dataset(ABC):
             return
 
         expected_train, expected_val, expected_test = self.split
-        if self.dataset_train is not None and expected_train != -1 and len(self.dataset_train) != expected_train:
-            logging.warning(f"Train dataset size mismatch: Expected {expected_train}, Got {len(self.dataset_train)}")
-        if self.dataset_val is not None and expected_val != -1 and len(self.dataset_val) != expected_val:
-            logging.warning(f"Validation dataset size mismatch: Expected {expected_val}, Got {len(self.dataset_val)}")
-        if self.dataset_test is not None and expected_test != -1 and len(self.dataset_test) != expected_test:
-            logging.warning(f"Test dataset size mismatch: Expected {expected_test}, Got {len(self.dataset_test)}")
+        train_dataset = cast(Optional[Sized], self.dataset_train)
+        val_dataset = cast(Optional[Sized], self.dataset_val)
+        test_dataset = cast(Optional[Sized], self.dataset_test)
+
+        if train_dataset is not None and expected_train != -1 and len(train_dataset) != expected_train:
+            logging.warning(f"Train dataset size mismatch: Expected {expected_train}, Got {len(train_dataset)}")
+        if val_dataset is not None and expected_val != -1 and len(val_dataset) != expected_val:
+            logging.warning(f"Validation dataset size mismatch: Expected {expected_val}, Got {len(val_dataset)}")
+        if test_dataset is not None and expected_test != -1 and len(test_dataset) != expected_test:
+            logging.warning(f"Test dataset size mismatch: Expected {expected_test}, Got {len(test_dataset)}")
 
     def get_splits(self) -> Sequence[int] | None:
         return self.split
