@@ -7,8 +7,6 @@ from gimm.datasets.definition import Dataset, Batch, Split
 
 class MemoryDataset(Dataset):
     def definitions(self):
-        self.dims = self.dims
-        self.num_classes = self.num_classes
         self.split = [0, 0, 0]
 
     def prepare_data(self):
@@ -22,7 +20,7 @@ class MemoryDataset(Dataset):
         elif stage == 'test':
             self.dataset_test = cast(TorchDataset, cast(object, self))
 
-    def populate(self, dataloader: Iterable[Batch], *, split=Split):
+    def populate(self, dataloader: Iterable[Batch], *, split: Split):
         samples_buffer = []
         labels_buffer = []
         for samples, labels in dataloader:
@@ -30,8 +28,8 @@ class MemoryDataset(Dataset):
             labels_buffer.append(labels.detach().cpu().clone())
 
         if samples_buffer:
-            self.samples = torch.cat(samples_buffer, dim=0)
-            self.labels = torch.cat(labels_buffer, dim=0)
+            self._buffer['samples'] = torch.cat(samples_buffer, dim=0)
+            self._buffer['labels'] = torch.cat(labels_buffer, dim=0)
 
         baked_self = cast(TorchDataset, cast(object, self))
         self.dataset_train = baked_self
@@ -39,8 +37,8 @@ class MemoryDataset(Dataset):
         self.dataset_test = baked_self
 
     def __len__(self):
-        return len(self.samples)
+        return len(self._buffer['samples'])
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
-        return sample, self.labels[idx]
+        sample = self._buffer['samples'][idx]
+        return sample, self._buffer['labels'][idx]

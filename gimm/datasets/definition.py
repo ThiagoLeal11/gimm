@@ -46,12 +46,12 @@ class Dataset(ABC):
         static_transforms: Optional[list[Callable]] = None,
         dynamic_transforms: Optional[list[Callable]] = None,
         dims: Optional[Sequence[int]]  = None,
-        num_classes: Optional[int] = None,
+        classes: Optional[dict[int, str]] = None,
         bake: bool = False,
         bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory',
         bake_path: Optional[str] = None,
 
-        split_config: Optional[list[int]] = None,
+        split_config: Optional[list[int | float]] = None,
     ):
         super().__init__()
         self.dataset_train: Optional[TorchDataset] = None
@@ -71,7 +71,7 @@ class Dataset(ABC):
         self.persistent_workers = persistent_workers
 
         self.dims: Sequence[int] = dims or []
-        self.num_classes: Optional[int] = num_classes
+        self.classes: dict[int, str] = classes or {}
         self.static_transforms = list(static_transforms) if static_transforms else []
         self.dynamic_transforms = list(dynamic_transforms) if dynamic_transforms else []
         self.bake = bake
@@ -80,13 +80,12 @@ class Dataset(ABC):
         self.definitions()
 
         assert self.dims, "Dataset dimensions must be defined in definitions() method."
-        assert self.num_classes is not None, "Number of classes must be defined in definitions() method."
+        assert self.classes, "Dataset classes must be defined in definitions() method."
         assert self.split is not None, "Dataset split must be defined in definitions() method."
         assert len(self.split) == 3, "Dataset split must be a list of three integers: [train_size, val_size, test_size]"
 
         if self.split_config:
             assert len(self.split_config) == 3, "split_config must be a list of three integers: [train_size, val_size, test_size]"
-            self.split = self.split_config
 
         if not self.static_transforms:
             self.static_transforms = [v2.ToImage()]
@@ -244,7 +243,7 @@ class Dataset(ABC):
         backend_cls = _load_bake_dataset_class(self.bake_type)
         dataset = backend_cls(
             dims=self.dims,
-            num_classes=self.num_classes,
+            classes=self.classes,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             seed=self.seed,
