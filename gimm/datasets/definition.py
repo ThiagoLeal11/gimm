@@ -95,6 +95,10 @@ class Dataset(ABC):
                 v2.ToDtype(torch.float32, scale=True),
                 v2.Normalize((0.5,) * self.dims[0], (0.5,) * self.dims[0]),
             ]
+            if bake and bake_type == 'memory':
+                self.static_transforms += self.dynamic_transforms
+                self.dynamic_transforms = []
+
 
         self.prepare_data()
         self._validation_applied = False
