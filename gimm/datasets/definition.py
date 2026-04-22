@@ -50,6 +50,7 @@ class Dataset(ABC):
         bake: bool = False,
         bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory',
         bake_path: Optional[str] = None,
+        bake_min_size: int = 0,
 
         split_config: Optional[list[int | float]] = None,
     ):
@@ -77,6 +78,8 @@ class Dataset(ABC):
         self.bake = bake
         self.bake_type = bake_type
         self.bake_path = bake_path
+        self.bake_min_size = bake_min_size
+        assert self.bake_min_size >= 0, "bake_min_size must be >= 0. Use 0 to disable duplication."
         self._buffer: dict[str, Any] = {}
         self.definitions()
 
@@ -206,6 +209,7 @@ class Dataset(ABC):
             'split': split,
             'dims': list(self.dims or []),
             'seed': self.seed,
+            'bake_min_size': self.bake_min_size,
             'source': {
                 'type': type(dataset).__qualname__,
                 'module': type(dataset).__module__,
@@ -312,16 +316,33 @@ class Dataset(ABC):
 
     def _build_baked_loader(self, split: Split, loader: DataLoader) -> DataLoader:
         baked_dataset = self._create_baked_dataset(split)
+        repetitions = self._get_bake_repetitions(split)
         progress_loader = tqdm(
-            loader,
-            total=len(loader),
-            desc=f'Baking {self.dataset_name} {split}',
+            self._repeat_loader(loader, repetitions),
+            total=len(loader) * repetitions,
+            desc=f"Baking {self.dataset_name} {split}" + (f" x{repetitions}" if repetitions > 1 else ''),
             leave=False,
         )
         baked_dataset.populate(progress_loader, split=split)
 
         self.set_baked(split, baked_dataset)
         return baked_dataset.build_dataloader(split)
+
+    def _get_bake_repetitions(self, split: Split) -> int:
+        if split != 'train' or self.bake_min_size <= 0:
+            return 1
+
+        dataset = self.get_dataset(split)
+        dataset_size = len(dataset)
+        if dataset_size <= 0:
+            return 1
+
+        return max(1, (self.bake_min_size + dataset_size - 1) // dataset_size)
+
+    @staticmethod
+    def _repeat_loader(loader: DataLoader, repetitions: int):
+        for _ in range(repetitions):
+            yield from loader
 
     def _get_or_create_loader(self, split: Split) -> DataLoader:
         # Reusing existing dataloader

@@ -102,6 +102,7 @@ class TrainerConfig:
     dataset_bake: bool = False
     dataset_bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory'
     dataset_bake_path: Optional[str] = 'output/baked_dataset/'
+    dataset_bake_min_size: int = 8000
 
     device: Optional[torch.device] = None
 
@@ -117,6 +118,7 @@ class TrainerConfig:
         assert self.grad_accum_steps > 0, "grad_accum_steps must be at least 1."
         assert self.d_updates_per_step >= 1, "d_updates_per_step must be at least 1."
         assert self.g_updates_per_step >= 1, "g_updates_per_step must be at least 1."
+        assert self.dataset_bake_min_size >= 0, "dataset_bake_min_size must be >= 0. Use 0 to disable duplication."
 
         # Assert controlling steps are all multiples of steps_per_batch
         assert self.steps_checkpoint % self.steps_per_batch == 0, "steps_checkpoint must be a multiple of steps_per_batch."

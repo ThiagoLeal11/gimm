@@ -12,6 +12,7 @@ def dataset_loader(
         bake: bool = False,
         bake_type: str = 'memory',
         bake_path: Optional[str] = None,
+        bake_min_size: int = 0,
 ) -> Dataset:
     kwargs = {
         'batch_size': batch_size,
@@ -21,6 +22,7 @@ def dataset_loader(
         'bake': bake,
         'bake_type': bake_type,
         'bake_path': bake_path,
+        'bake_min_size': bake_min_size,
     }
 
     if name == "cifar10":

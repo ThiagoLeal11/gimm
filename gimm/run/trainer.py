@@ -11,7 +11,7 @@ from gimm.datasets.definition import Dataset
 from gimm.dataloaders.infinite import InfinitePrefetchLoader
 from gimm.dataloaders.eval import ValidationLoader
 from gimm.eval.fidelity import FidelityEvalMetric, compute_metrics
-from gimm.logs.log import Logger, get_wandb_run_id
+from gimm.logs.log import Logger, get_wandb_run_id, LoggerWandb
 from gimm.models.definition import ModuleGAN
 from gimm.run.config import TrainerConfig
 from gimm.run.loader import dataset_loader
@@ -191,6 +191,7 @@ class Trainer:
             bake=cfg.dataset_bake,
             bake_type=cfg.dataset_bake_type,
             bake_path=cfg.dataset_bake_path,
+            bake_min_size=cfg.dataset_bake_min_size,
         )
 
         if self.configs.validation_policy == 'strict' and dataset.get_splits()[1] < cfg.validation_samples:
