@@ -11,15 +11,20 @@ BATCH = tuple[torch.Tensor, torch.Tensor]
 
 
 class InfinitePrefetchLoader:
-    def __init__(self, dataloader: DL, device: torch.device = None, *, queue_size: int = 4, infinite: bool = True, preload: bool = True):
+    def __init__(
+            self, dataloader: DL, device: torch.device = None, *, queue_size: int = 4, infinite: bool = True,
+            preload: bool = True, continuous_shuffle: bool = True
+    ):
         self.dataloader = dataloader
         self.batch_size = dataloader.batch_size
         self.device = device
         self.queue_size = queue_size
         self.epoch = 0
+        self._base_seed = dataloader.generator.initial_seed() if getattr(dataloader, 'generator', None) is not None else None
 
         self.is_infinite = infinite
         self.should_preload = preload
+        self.continuous_shuffle = continuous_shuffle
         self._stall_warned = False
 
     def __iter__(self) -> Generator[BATCH, None, None]:
@@ -41,6 +46,9 @@ class InfinitePrefetchLoader:
 
     def _infinite(self, dataloader: DL) -> Generator[BATCH, None, None]:
         while True:
+            if self.continuous_shuffle and self._base_seed is not None:
+                dataloader.generator.manual_seed(self._base_seed + self.epoch)
+
             batches_seen = 0
             full_batches_seen = 0
             last_batch_size = None

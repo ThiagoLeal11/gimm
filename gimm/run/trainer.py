@@ -224,7 +224,9 @@ class Trainer:
         inner_step = total_inner_steps
 
         train_dataloader = data.train_dataloader()
-        sampler = InfinitePrefetchLoader(train_dataloader, device=self.device, infinite=True, preload=True)
+        sampler = InfinitePrefetchLoader(
+            train_dataloader, device=self.device, infinite=True, preload=True, continuous_shuffle=True
+        )
 
         for (imgs, labels) in sampler:
             metrics = {}
