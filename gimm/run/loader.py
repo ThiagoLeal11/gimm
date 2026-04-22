@@ -38,5 +38,8 @@ def dataset_loader(
     elif name == "toucan":
         from gimm.datasets.debug.toucan import DatasetToucan
         return DatasetToucan(**kwargs)
+    elif name == "folder":
+        from gimm.datasets.generic.folder import FolderDataset
+        return FolderDataset(**kwargs)
     else:
         raise ValueError(f"Dataset {name} not found.")

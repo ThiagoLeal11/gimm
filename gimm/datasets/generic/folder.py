@@ -1,107 +1,131 @@
-import json
+import logging
+from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Iterable, Literal
 
 import torch
-from torch.utils.data import DataLoader
+from torchvision.datasets import ImageFolder
+from torchvision.io import read_image, write_png
 
-from gimm.datasets.definition import Dataset
+from gimm.datasets.definition import Dataset, Split, Batch
 
 
 class FolderDataset(Dataset):
-    """Mock folder-backed baked dataset.
-
-    For now this stores each sample as a `.pt` file plus a small metadata.json.
-    """
-
-    def __init__(
-            self,
-            path: str | Path,
-            dims: Sequence[int],
-            num_classes: int,
-            batch_size: int = 1,
-            num_workers: int = 0,
-            dynamic_transforms: Optional[Sequence[Callable]] = None,
-    ):
-        self.path = Path(path)
-        self._backend_dims = tuple(dims)
-        self._backend_num_classes = num_classes
-        self._length = 0
-        self._populated = False
-        super().__init__(
-            batch_size=batch_size,
-            num_workers=num_workers,
-            data_dir=str(self.path),
-            static_transforms=[],
-            dynamic_transforms=dynamic_transforms,
-            bake=False,
-        )
-        self._read_metadata()
-
     def definitions(self):
-        self.dims = self._backend_dims
-        self.num_classes = self._backend_num_classes
-        self.split = [0, 0, 0]
+        is_on_baking = bool(self.dims) and bool(self.classes) and self.split_config is None
+        dataset = self._load_image_folder()
 
-    def prepare_data(self):
-        pass
+        if dataset is None:
+            if not is_on_baking:
+                raise ValueError(
+                    f"FolderDataset requires images under '{self.data_dir}' or explicit `dims` and `classes` for empty roots.",
+                )
 
-    def setup(self, stage: str):
-        if stage == 'train':
-            self.dataset_train = self
-            self.dataset_val = self
-        elif stage == 'test':
-            self.dataset_test = self
-
-    def _metadata_path(self) -> Path:
-        return self.path / 'metadata.json'
-
-    def _sample_path(self, idx: int) -> Path:
-        return self.path / f'{idx:010d}.pt'
-
-    def _read_metadata(self):
-        metadata_path = self._metadata_path()
-        if not metadata_path.exists():
+            self.split = [0, 0, 0]
             return
 
-        metadata = json.loads(metadata_path.read_text())
-        self._length = metadata.get('length', 0)
-        self._populated = metadata.get('populated', False)
+        sample, _ = dataset[0]
+        self.dims = tuple(sample.shape)
+        self.classes = {idx: name for name, idx in dataset.class_to_idx.items()}
 
-    def populate(self, dataloader: DataLoader):
-        if self._populated:
+        if not self.split_config:
+            logging.warning(
+                f"FolderDataset split_config missing for '{self.data_dir}'. Using default 80% / 10% / 10% split.",
+            )
+            self.split_config = [0.8, 0.1, 0.1]
+
+        self.split = self._compute_split(dataset, self.split_config)
+        self._buffer['dataset_full'] = dataset
+
+    def setup(self, stage: Literal["train", "test"]):
+        # Setup was already completed in a previous step
+        if self.dataset_train is not None and stage == 'train' or self.dataset_test is not None and stage == 'test':
             return
 
-        self.path.mkdir(parents=True, exist_ok=True)
-        index = 0
+        train, val, test = self._split_dataset(self._buffer.pop('dataset_full'), self.split)
+        self.dataset_train = train
+        self.dataset_val = val
+        self.dataset_test = test
+
+        self._verify_split_sizes()
+
+    def populate(self, dataloader: Iterable[Batch], *, split: Split):
+        split_root = Path(self.data_dir)
+        split_root.mkdir(parents=True, exist_ok=True)
+
+        counters: dict[str, int] = defaultdict(int)
         for samples, labels in dataloader:
             for sample, label in zip(samples, labels):
-                torch.save(
-                    {
-                        'sample': sample.detach().cpu(),
-                        'label': label.detach().cpu(),
-                    },
-                    self._sample_path(index),
-                )
-                index += 1
+                # Ensure class folder
+                class_name = self.classes[self._label_to_int(label)]
+                class_dir = split_root / class_name
+                class_dir.mkdir(parents=True, exist_ok=True)
 
-        self._length = index
-        self._populated = True
-        self._metadata_path().write_text(json.dumps({'length': index, 'populated': True}))
+                # Save image
+                counters[class_name] += 1
+                output_path = class_dir / f'{counters[class_name]:05d}.png'
+                write_png(self.to_int8_image(sample), str(output_path))
 
-    def __len__(self):
-        return self._length
+        dataset = self._load_image_folder()
+        if dataset is None:
+            raise RuntimeError(f"FolderDataset populate() did not create any readable images under '{self.data_dir}'.")
 
-    def __getitem__(self, idx):
-        sample_path = self._sample_path(idx)
-        if not sample_path.exists():
-            raise IndexError(idx)
+        self.set_dataset(split, dataset)
+
+    def _load_image_folder(self) -> ImageFolder | None:
+        root = Path(self.data_dir)
+        if not root.exists() or not root.is_dir():
+            return None
+
+        class_dirs = [
+            entry
+            for entry in root.iterdir()
+            if entry.is_dir() and not entry.name.startswith('.')
+        ]
+        if not class_dirs:
+            return None
 
         try:
-            item = torch.load(sample_path, map_location='cpu', weights_only=False)
-        except TypeError:
-            item = torch.load(sample_path, map_location='cpu')
-        sample = item['sample']
-        return sample, item['label']
+            return ImageFolder(self.data_dir, loader=read_image)
+        except FileNotFoundError:
+            return None
 
+    @staticmethod
+    def _label_to_int(label: torch.Tensor | int) -> int:
+        if isinstance(label, torch.Tensor):
+            return int(label.detach().cpu().item())
+        return int(label)
 
+    def to_int8_image(self, sample: torch.Tensor) -> torch.Tensor:
+        if not isinstance(sample, torch.Tensor):
+            raise TypeError(f'Expected image tensor, got {type(sample)!r}.')
+
+        image = sample.detach().cpu()
+        if image.ndim == 2:
+            image = image.unsqueeze(0)
+        if image.ndim != 3:
+            raise ValueError(f'Expected image tensor with shape [C, H, W], got {tuple(image.shape)}.')
+
+        if image.dtype == torch.uint8:
+            return image.contiguous()
+
+        image = image.float()
+        if not torch.isfinite(image).all():
+            raise ValueError('Image tensor contains non-finite values and cannot be written as PNG.')
+
+        min_value = float(image.min().item())
+        max_value = float(image.max().item())
+
+        if -1.0 <= min_value and max_value <= 1.0:
+            if min_value < 0.0:
+                image = ((image + 1.0) * 127.5).round()
+            else:
+                image = (image * 255.0).round()
+        elif 0.0 <= min_value and max_value <= 255.0:
+            image = image.round()
+        else:
+            raise ValueError(
+                f'Unsupported image range [{min_value}, {max_value}]. Expected uint8-like [0, 255], float [0, 1], or float [-1, 1].',
+            )
+
+        return image.clamp(0.0, 255.0).to(torch.uint8).contiguous()
