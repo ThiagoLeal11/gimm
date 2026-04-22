@@ -122,7 +122,7 @@ class InfinitePrefetchLoader:
         ema_use_time = None
         ema_alpha = 0.2
         stall_ratio = 1.1
-        stall_patience = 3
+        stall_patience = 8
         warmup_batches = 24
         stall_count = 0
         use_time = None
