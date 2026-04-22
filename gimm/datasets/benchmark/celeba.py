@@ -8,7 +8,7 @@ from gimm.datasets.definition import Dataset
 class DatasetCelebA(Dataset):
     def definitions(self):
         self.dims = (3, 178, 218)
-        self.num_classes = 1
+        self.classes = {0: 'face'}
         # CelebA official split: 162770 train, 19867 val, 19962 test
         self.split = [162770, 19867, 19962]
 
