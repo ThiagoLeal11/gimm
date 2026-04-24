@@ -43,8 +43,8 @@ class Dataset(ABC):
         prefetch_factor: int = 1,
         pin_memory_device: torch.device = 'cpu',
         persistent_workers: bool = True,
-        static_transforms: Optional[list[Callable]] = None,
-        dynamic_transforms: Optional[list[Callable]] = None,
+        static_transforms: Optional[Sequence[Callable]] = None,
+        dynamic_transforms: Optional[Sequence[Callable]] = None,
         dims: Optional[Sequence[int]]  = None,
         classes: Optional[dict[int, str]] = None,
         bake: bool = False,
@@ -73,8 +73,8 @@ class Dataset(ABC):
 
         self.dims: Sequence[int] = dims or []
         self.classes: dict[int, str] = classes or {}
-        self.static_transforms = list(static_transforms) if static_transforms else []
-        self.dynamic_transforms = list(dynamic_transforms) if dynamic_transforms else []
+        self.static_transforms = static_transforms
+        self.dynamic_transforms = dynamic_transforms
         self.bake = bake
         self.bake_type = bake_type
         self.bake_path = bake_path
@@ -94,9 +94,9 @@ class Dataset(ABC):
         if self.split_config:
             assert len(self.split_config) == 3, "split_config must be a list of three integers: [train_size, val_size, test_size]"
 
-        if not self.static_transforms:
+        if self.static_transforms is None:
             self.static_transforms = [v2.ToImage()]
-        if not self.dynamic_transforms:
+        if self.dynamic_transforms is None:
             self.dynamic_transforms = [
                 v2.ToDtype(torch.float32, scale=True),
                 v2.Normalize((0.5,) * self.dims[0], (0.5,) * self.dims[0]),
@@ -105,6 +105,8 @@ class Dataset(ABC):
                 self.static_transforms += self.dynamic_transforms
                 self.dynamic_transforms = []
 
+        self.static_transforms = list(self.static_transforms) if self.static_transforms else []
+        self.dynamic_transforms = list(self.dynamic_transforms) if self.dynamic_transforms else []
 
         self.prepare_data()
         self._validation_applied = False
@@ -293,6 +295,7 @@ class Dataset(ABC):
             prefetch_factor=self.prefetch_factor,
             pin_memory_device=torch.device(self.pin_memory_device or 'cpu'),
             persistent_workers=self.persistent_workers,
+            static_transforms=[],
             dynamic_transforms=self.dynamic_transforms,
             data_dir=str(pathlib.Path(self.bake_path) / split),
         )
