@@ -34,6 +34,15 @@ class Trainer:
         self.device = configs.device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
 
+        # Log device utilization
+        device = self.get_runtime_device(self.model, self.device)
+        if device.type != 'cpu':
+            device_index = device.index if device.index is not None else torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(device_index)
+            print(f'Modelo executando com aceleração: ({device_name}):{device_index}')
+        else:
+            warnings.warn(f'Modelo executando sem aceleração! Dispositivo atual: {device}.')
+
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
@@ -77,6 +86,18 @@ class Trainer:
 
         # Cleans evaluation cache from other runs
         clean_dir_deep(pathlib.Path(self.configs.output_path) / 'cache' / 'fidelity_cache')
+
+    @staticmethod
+    def get_runtime_device(model: torch.nn.Module, fallback: torch.device) -> torch.device:
+        parameter = next(model.parameters(), None)
+        if parameter is not None:
+            return parameter.device
+
+        buffer = next(model.buffers(), None)
+        if buffer is not None:
+            return buffer.device
+
+        return fallback
 
     def save_checkpoint(self):
         self.checkpoint.save(step=self.step)
