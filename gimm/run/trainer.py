@@ -34,15 +34,6 @@ class Trainer:
         self.device = configs.device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
 
-        # Log device utilization
-        device = self.get_runtime_device(self.model, self.device)
-        if device.type != 'cpu':
-            device_index = device.index if device.index is not None else torch.cuda.current_device()
-            device_name = torch.cuda.get_device_name(device_index)
-            print(f'Modelo executando com aceleração: ({device_name}):{device_index}')
-        else:
-            warnings.warn(f'Modelo executando sem aceleração! Dispositivo atual: {device}.')
-
         self.fixed_z = self.model.get_latent(configs.images_to_log)
 
         # Define the optimizers and schedulers
@@ -53,7 +44,7 @@ class Trainer:
         self.lr_schedulers_d = self.create_schedulers(self.configs.d_scheduler, self.optimizers_d)
 
         self.checkpoint = Checkpoint(
-            configs=configs.__dict__,
+            configs=configs.get_user_overrides(),
             args={
                 'wandb_run_id': get_wandb_run_id(loggers),
                 'fixed_z': self.fixed_z,
@@ -61,10 +52,16 @@ class Trainer:
             model=self.model,
             optimizer_generator=self.optimizers_g,
             optimizer_discriminator=self.optimizers_d,
-            checkpoint_prefix=configs.output_path + '/checkpoints/checkpoint-',
-            raise_if_dir_not_empty=not configs.resume_checkpoint,
-            clean_checkpoint_dir=configs.delete_checkpoint,
+            scheduler_generator=self.lr_schedulers_g,
+            scheduler_discriminator=self.lr_schedulers_d,
         )
+
+        is_pretrained_from_file = self.configs.pretrained and isinstance(configs.pretrained, str)
+        if is_pretrained_from_file:
+            print('loading model weights from pretrained checkpoint')
+            self.checkpoint.load(
+                checkpoint_path=self.configs.pretrained,
+            )
 
         if configs.resume_checkpoint:
             print('resuming_checkpoint')
@@ -105,14 +102,16 @@ class Trainer:
     def resume_checkpoint(self, path: str):
         self.step = self.checkpoint.load(
             checkpoint_path=path,
-            should_resume_config=self.configs.checkpoint_resume_config,
-            weights_only=self.configs.checkpoint_weights_only
         )
-        if self.configs.checkpoint_resume_config:
-            self.configs.__dict__.update(self.checkpoint.configs)
+        self.configs.__dict__.update(self.checkpoint.configs)
+        self.device = torch.device(self.configs.device)
+        self.model.to(self.device)
 
     @staticmethod
     def create_optimizers(config_opt: Optimizer | dict[str, Optimizer], networks: torch.nn.ModuleDict) -> dict[str, torch.optim.Optimizer]:
+        if not config_opt:
+            return {}
+
         # Single config for all networks
         if not isinstance(config_opt, dict):
             return {

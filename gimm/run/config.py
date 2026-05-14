@@ -4,6 +4,7 @@ from typing import Optional, Literal
 import torch
 
 from gimm.eval.fidelity import MetricName
+from gimm.run.default_classes import track_overrides, TrackOverridesMixin
 from gimm.run.optimizer import Optimizer
 from gimm.scheduler.scheduler import Scheduler
 
@@ -48,8 +49,9 @@ class StopCondition:
         return cls(metric=parts[0], comparator=parts[1], threshold=float(parts[2]))
 
 
+@track_overrides
 @dataclass
-class TrainerConfig:
+class TrainerConfig(TrackOverridesMixin):
     project: str = 'gimm'
     group: Optional[str] = None
     execution_name: Optional[str] = None
@@ -89,10 +91,9 @@ class TrainerConfig:
 
     # Checkpoint
     output_path: str = "output"
-    resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000.pth.tar'
+    resume_checkpoint: str = ''  # 'output/checkpoints/checkpoint-150_000'
+    pretrained: Optional[bool | str] = None  # 'path/to/model.safetensors'
     delete_checkpoint: bool = False
-    checkpoint_resume_config: bool = True
-    checkpoint_weights_only: bool = False
 
     # Useful for distribute default configs for the model training
     dataset: Optional[str] = None
