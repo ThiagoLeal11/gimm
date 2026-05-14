@@ -84,6 +84,15 @@ class Trainer:
         # Cleans evaluation cache from other runs
         clean_dir_deep(pathlib.Path(self.configs.output_path) / 'cache' / 'fidelity_cache')
 
+        # Log device utilization
+        device = self.get_runtime_device(self.model, self.device)
+        if device.type != 'cpu':
+            device_index = device.index if device.index is not None else torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(device_index)
+            print(f'Model running with hardware acceleration: ({device_name}):{device_index}')
+        else:
+            warnings.warn(f'Model running without acceleration. Current device: {device}.')
+
     @staticmethod
     def get_runtime_device(model: torch.nn.Module, fallback: torch.device) -> torch.device:
         parameter = next(model.parameters(), None)
