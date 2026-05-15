@@ -1,116 +1,179 @@
+import json
 import pathlib
 
 import torch
+from safetensors.torch import load_file as load_safetensors
+from safetensors.torch import save_file as save_safetensors
 
 from gimm.models.definition import ModuleGAN
+from gimm.run.config import TrainerConfig
+from gimm.scheduler.scheduler import Scheduler
 
 
 # TODO: Implement model_ema save
 # TODO: Implement amp_scaler save
 class Checkpoint:
+    MODEL_FILE_NAME = 'model.safetensors'
+    TRAINING_STATE_FILE_NAME = 'training-state.pth.tar'
+    METADATA_FILE_NAME = 'metadata.json'
+
     def __init__(self,
         model: ModuleGAN,
-        optimizer_generator: torch.optim.Optimizer | dict[str, torch.optim.Optimizer],
-        optimizer_discriminator: torch.optim.Optimizer | dict[str, torch.optim.Optimizer],
+        optimizer_generator: dict[str, torch.optim.Optimizer],
+        optimizer_discriminator: dict[str, torch.optim.Optimizer],
+        scheduler_generator: dict[str, Scheduler],
+        scheduler_discriminator: dict[str, Scheduler],
         args: dict = None,
         configs: dict = None,
-        checkpoint_prefix: str = 'checkpoint-',
-        max_keep: int = 10,
-        raise_if_dir_not_empty: bool = True,
-        clean_checkpoint_dir: bool = False,
     ):
         self.model = model
         self.optimizer_generator = optimizer_generator
         self.optimizer_discriminator = optimizer_discriminator
+        self.scheduler_generator = scheduler_generator
+        self.scheduler_discriminator = scheduler_discriminator
         self.args = args
         self.configs = configs
-        self.checkpoint_prefix = checkpoint_prefix
-        self.max_keep = max_keep
+        # self.max_keep = max_keep
+        default_config_values = TrainerConfig().__dict__
 
-        path = checkpoint_prefix.rsplit('/', 1)[0] if '/' in checkpoint_prefix else ''
+        path = self.get_checkpoint_path()
         if path:
-            # Create a checkpoint directory
-            pathlib.Path(path).mkdir(parents=True, exist_ok=True)
-
             # Clean Checkpoint Directory
-            if clean_checkpoint_dir:
+            if configs.get("delete_checkpoint", default_config_values['delete_checkpoint']):
                  clean_dir_deep(pathlib.Path(path))
 
             # Ensure the checkpoint directory is empty if not resuming from a checkpoint
-            if raise_if_dir_not_empty and any(pathlib.Path(path).iterdir()):
-                error_message = f"Checkpoint directory {path} is not empty and resume_checkpoint is not set."
+            has_some_checkpoint = configs.get('resume_checkpoint') or configs.get('pretrained')
+            if not has_some_checkpoint and any(pathlib.Path(path).iterdir()):
+                error_message = (
+                    f"Checkpoint directory {path} is not empty and resume_checkpoint is not set. "
+                    f"This can lead to unexpected overwrite. Please select a different path."
+                )
                 raise ValueError(error_message)
 
+    def get_checkpoint_path(self) -> str:
+        return self.configs.get('output_path', '') + f"/checkpoints/"
+
+    def get_checkpoint_prefix(self) -> str:
+        return f"{self.get_checkpoint_path()}checkpoint-"
+
     def save(self, step: int):
-        save_path = self.checkpoint_prefix + f'{step:_}.pth.tar'
-        state = {
-            'step': step,
-            'arch': type(self.model).__name__.lower(),
+        # Create a checkpoint directory
+        pathlib.Path(self.get_checkpoint_path()).mkdir(parents=True, exist_ok=True)
+
+        save_dir = pathlib.Path(f"{self.get_checkpoint_prefix()}{step:_}")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        training_state = {
             'args': self.args,
-            'configs': self.configs,
-            'model_state_dict': unwrap_model(self.model).state_dict(),
             'optimizer_g': self._get_optimizer_state(self.optimizer_generator),
             'optimizer_d': self._get_optimizer_state(self.optimizer_discriminator),
+            'scheduler_g': self._get_scheduler_state(self.scheduler_generator),
+            'scheduler_d': self._get_scheduler_state(self.scheduler_discriminator),
         }
-        torch.save(state, save_path)
+        save_safetensors(self._cpu_state_dict(), str(save_dir / self.MODEL_FILE_NAME))
+        torch.save(training_state, save_dir / self.TRAINING_STATE_FILE_NAME)
 
-        # save_path = self.checkpoint_prefix + f'{step:_}'
-        #
-        # # Save model
-        # torch.save({
-        #     'arch': type(self.model).__name__.lower(),
-        #     'args': self.args,
-        #     'configs': self.configs,
-        #     'model_state_dict': unwrap_model(self.model).state_dict(),
-        # }, save_path + '_model.pth.tar')
-        #
-        # # Save Optimizers
-        # torch.save({
-        #     'step': step,
-        #     'optimizer_g': self.optimizer_generator.state_dict(),
-        #     'optimizer_d': self.optimizer_discriminator.state_dict(),
-        # }, save_path + '_optimizers.pth.tar')
+        with (save_dir / self.METADATA_FILE_NAME).open('w', encoding='utf-8') as file:
+            json.dump(self._to_jsonable({
+                'step': step,
+                'arch': type(self.model).__name__.lower(),
+                'configs': self.configs,
+            }), file, indent=2, sort_keys=True)
 
     def cycle_checkpoints(self, epoch):
         # TODO: Implement cycle_checkpoints
         # TODO: Implement last.pth.tar and best.pth.tar
         pass
 
-    def load(self, checkpoint_path: str, should_resume_config: bool = False, weights_only: bool = False) -> int:
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=weights_only)
-        if not isinstance(checkpoint, dict):
-            raise ValueError('Invalid Checkpoint. Checkpoint is not a dictionary')
+    def load(self, checkpoint_path: str) -> int:
+        path = pathlib.Path(checkpoint_path)
+        if not path.is_dir() and path.suffix != '.safetensors':
+            raise ValueError(f'Invalid checkpoint. Checkpoint ({path}) is neither a directory nor a model file.')
 
-        self.args = checkpoint['args']
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        # Load the model
+        if path.suffix == '.safetensors':
+            self.model.load_state_dict(load_safetensors(str(path)))
+            return 0
+        self.model.load_state_dict(load_safetensors(str(path / self.MODEL_FILE_NAME)))
 
-        if not weights_only:
-            self._load_optimizer_state(self.optimizer_generator, checkpoint['optimizer_g'])
-            self._load_optimizer_state(self.optimizer_discriminator, checkpoint['optimizer_d'])
+        training_state = torch.load(path / self.TRAINING_STATE_FILE_NAME, map_location='cpu')
+        self.args = training_state.get('args', self.args)
 
-        configs = checkpoint.get('configs', {})
-        if should_resume_config:
-            self.configs = configs
-        else:
-            # Check if the batch_size is compatible
-            restored_full_batch_size = configs.get('batch_size', 0) * configs.get('grad_accum_steps', 1)
-            full_batch_size = self.configs.get('batch_size', 0) * self.configs.get('grad_accum_steps', 1)
-            if restored_full_batch_size != full_batch_size:
-                raise ValueError(f"Restored batch size {restored_full_batch_size} is not compatible with the current batch size {full_batch_size}. Please set resume_config to True, or change the batch_size or grad_accum_steps in the current config.")
+        self._load_optimizer_state(self.optimizer_generator, training_state['optimizer_g'])
+        self._load_optimizer_state(self.optimizer_discriminator, training_state['optimizer_d'])
 
-        return checkpoint['step']
+        # Load only the schedulers that arend overrides.
+        if not self._has_scheduler(self.scheduler_generator) and 'scheduler_g' in training_state:
+            self._load_scheduler_state(self.scheduler_generator, training_state['scheduler_g'])
+        if not self._has_scheduler(self.scheduler_discriminator) and 'scheduler_d' in training_state:
+            self._load_scheduler_state(self.scheduler_discriminator, training_state['scheduler_d'])
 
-    def _get_optimizer_state(self, optimizer):
-        if isinstance(optimizer, dict):
-            return {k: v.state_dict() for k, v in optimizer.items()}
-        return optimizer.state_dict()
+        with (path / self.METADATA_FILE_NAME).open('r', encoding='utf-8') as file:
+            metadata = json.load(file)
+            training_configs = metadata['configs']
 
-    def _load_optimizer_state(self, optimizer, state):
-        if isinstance(optimizer, dict):
-            for k, v in optimizer.items():
+        # Keeping the user overrides to the resumed config
+        training_configs.update(self.configs)
+
+        # Cleanup not initialized optimizers
+        if isinstance(training_configs['g_optimizer'], str):
+            training_configs.pop('g_optimizer')
+        if isinstance(training_configs['d_optimizer'], str):
+            training_configs.pop('d_optimizer')
+
+        self.configs = training_configs
+        return metadata['step'] + 1
+
+    def _cpu_state_dict(self) -> dict[str, torch.Tensor]:
+        return {
+            key: value.detach().cpu().contiguous()
+            for key, value in unwrap_model(self.model).state_dict().items()
+        }
+
+    @classmethod
+    def _to_jsonable(cls, value):
+        if isinstance(value, dict):
+            return {str(k): cls._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._to_jsonable(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, pathlib.Path):
+            return str(value)
+        if isinstance(value, torch.device):
+            return str(value)
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+        return repr(value)
+
+    @staticmethod
+    def _get_optimizer_state(optimizers: dict[str, torch.optim.Optimizer]):
+        return {k: v.state_dict() for k, v in optimizers.items()}
+
+    @staticmethod
+    def _load_optimizer_state(optimizers: dict[str, torch.optim.Optimizer], state):
+        for k, v in optimizers.items():
+            v.load_state_dict(state[k])
+
+    @staticmethod
+    def _get_scheduler_state(schedulers: dict[str, Scheduler] | None):
+        if schedulers is None:
+            return None
+        return {k: v.state_dict() for k, v in schedulers.items()}
+
+    @staticmethod
+    def _load_scheduler_state(schedulers: dict[str, Scheduler] | None, state):
+        if schedulers is None or state is None:
+            return
+
+        for k, v in schedulers.items():
+            if k in state:
                 v.load_state_dict(state[k])
-        else:
-            optimizer.load_state_dict(state)
+
+    @staticmethod
+    def _has_scheduler(schedulers: dict[str, Scheduler]):
+        return all(isinstance(sch, Scheduler) for sch in schedulers.values())
 
 
 def unwrap_model(model):
