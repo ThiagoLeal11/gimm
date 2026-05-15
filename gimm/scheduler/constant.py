@@ -9,9 +9,9 @@ class ConstantLR(Scheduler):
         self.lr = []
 
     def construct(self, optimizer: torch.optim.Optimizer) -> 'ConstantLR':
-        super(ConstantLR, self).construct(optimizer)
-        self.lr = [opt[self.param_name] for opt in self.optimizer.param_groups]
-        return self
+        new_scheduler = super(ConstantLR, self).construct(optimizer)
+        new_scheduler.lr = [opt[self.param_name] for opt in new_scheduler.optimizer.param_groups]
+        return new_scheduler
 
     def _compute_lr(self, t: int) -> list[float]:
         return self.lr
