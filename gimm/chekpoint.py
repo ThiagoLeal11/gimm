@@ -24,26 +24,23 @@ class Checkpoint:
         scheduler_generator: dict[str, Scheduler],
         scheduler_discriminator: dict[str, Scheduler],
         args: dict = None,
-        configs: dict = None,
+        configs: TrainerConfig | None = None,
     ):
         self.model = model
         self.optimizer_generator = optimizer_generator
         self.optimizer_discriminator = optimizer_discriminator
         self.scheduler_generator = scheduler_generator
         self.scheduler_discriminator = scheduler_discriminator
-        self.args = args
-        self.configs = configs
-        # self.max_keep = max_keep
-        default_config_values = TrainerConfig().__dict__
-
+        self.args = args or {}
+        self.configs = configs or TrainerConfig()
         path = self.get_checkpoint_path()
         if path:
             # Clean Checkpoint Directory
-            if configs.get("delete_checkpoint", default_config_values['delete_checkpoint']):
-                 clean_dir_deep(pathlib.Path(path))
+            if self.configs.delete_checkpoint:
+                clean_dir_deep(pathlib.Path(path))
 
             # Ensure the checkpoint directory is empty if not resuming from a checkpoint
-            has_some_checkpoint = configs.get('resume_checkpoint') or configs.get('pretrained')
+            has_some_checkpoint = self.configs.resume_checkpoint or self.configs.pretrained
             if not has_some_checkpoint and any(pathlib.Path(path).iterdir()):
                 error_message = (
                     f"Checkpoint directory {path} is not empty and resume_checkpoint is not set. "
@@ -52,10 +49,10 @@ class Checkpoint:
                 raise ValueError(error_message)
 
     def get_checkpoint_path(self) -> str:
-        return self.configs.get('output_path', '') + f"/checkpoints/"
+        return str(pathlib.Path(self.configs.output_path) / 'checkpoints')
 
     def get_checkpoint_prefix(self) -> str:
-        return f"{self.get_checkpoint_path()}checkpoint-"
+        return str(pathlib.Path(self.get_checkpoint_path()) / 'checkpoint-')
 
     def save(self, step: int):
         # Create a checkpoint directory
@@ -78,7 +75,7 @@ class Checkpoint:
             json.dump(self._to_jsonable({
                 'step': step,
                 'arch': type(self.model).__name__.lower(),
-                'configs': self.configs,
+                'configs': self.configs.to_dict(),
             }), file, indent=2, sort_keys=True)
 
     def cycle_checkpoints(self, epoch):
@@ -114,7 +111,8 @@ class Checkpoint:
             training_configs = metadata['configs']
 
         # Keeping the user overrides to the resumed config
-        training_configs.update(self.configs)
+        override_values = self.configs.get_user_overrides()
+        training_configs.update(override_values)
 
         # Cleanup not initialized optimizers
         if isinstance(training_configs['g_optimizer'], str):
@@ -122,7 +120,7 @@ class Checkpoint:
         if isinstance(training_configs['d_optimizer'], str):
             training_configs.pop('d_optimizer')
 
-        self.configs = training_configs
+        self.configs.set(training_configs)
         return metadata['step'] + 1
 
     def _cpu_state_dict(self) -> dict[str, torch.Tensor]:

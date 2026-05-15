@@ -44,7 +44,7 @@ class Trainer:
         self.lr_schedulers_d = self.create_schedulers(self.configs.d_scheduler, self.optimizers_d)
 
         self.checkpoint = Checkpoint(
-            configs=configs.get_user_overrides(),
+            configs=configs,
             args={
                 'wandb_run_id': get_wandb_run_id(loggers),
                 'fixed_z': self.fixed_z,
@@ -112,7 +112,6 @@ class Trainer:
         self.step = self.checkpoint.load(
             checkpoint_path=path,
         )
-        self.configs.__dict__.update(self.checkpoint.configs)
         self.device = torch.device(self.configs.device)
         self.model.to(self.device)
 
