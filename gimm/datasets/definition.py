@@ -21,7 +21,7 @@ def _load_bake_dataset_class(bake_type: str) -> type["Dataset"]:
         from gimm.datasets.generic.memory import MemoryDataset
         return MemoryDataset
     if bake_type == 'lmdb':
-        from gimm.datasets.generic.lmdb import LMDBDataset
+        from gimm.datasets.generic.lmdb_file import LMDBDataset
         return LMDBDataset
     if bake_type == 'folder':
         from gimm.datasets.generic.folder import FolderDataset
@@ -41,7 +41,7 @@ class Dataset(ABC):
         seed: int = 42,
         shuffle: bool = True,
         prefetch_factor: int = 1,
-        pin_memory_device: torch.device = 'cpu',
+        pin_memory_device: torch.device = torch.device('cpu'),
         persistent_workers: bool = True,
         static_transforms: Optional[Sequence[Callable]] = None,
         dynamic_transforms: Optional[Sequence[Callable]] = None,
@@ -67,7 +67,7 @@ class Dataset(ABC):
         self.num_workers = num_workers
         self.seed = seed
         self.shuffle = shuffle
-        self.pin_memory_device: str = str(pin_memory_device) if str(pin_memory_device).lower() != 'cpu' else ""
+        self.pin_memory_device: str = pin_memory_device.type if pin_memory_device.type.lower() != 'cpu' else ""
         self.prefetch_factor = prefetch_factor
         self.persistent_workers = persistent_workers
 
