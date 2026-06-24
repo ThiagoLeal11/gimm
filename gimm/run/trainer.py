@@ -202,7 +202,7 @@ class Trainer:
 
         return torch.cat(generated_images, dim=0)
 
-    def load_dataset(self, data: Optional[Dataset] = None):
+    def load_dataset(self, data: Optional[Dataset] = None) -> Dataset:
         if data is not None:
             assert isinstance(data, Dataset), f"Expected data to be a Dataset instance, got {type(data)}"
             return data
@@ -214,7 +214,7 @@ class Trainer:
             name=cfg.dataset,
             batch_size=cfg.batch_size * cfg.grad_accum_steps,
             num_workers=cfg.num_workers,
-            data_dir=cfg.dataset_dir,
+            data_dir=cfg.dataset_dir or '',
             split_config=cfg.split_config,
             bake=cfg.dataset_bake,
             bake_type=cfg.dataset_bake_type,
@@ -246,7 +246,7 @@ class Trainer:
             if data is not None and hasattr(data, 'shutdown'):
                 data.shutdown()
 
-    def train_loop(self, data: Optional[Dataset] = None):
+    def train_loop(self, data: Dataset):
         step = self.step
         total_inner_steps = max(self.configs.g_updates_per_step, self.configs.d_updates_per_step)
         inner_step = total_inner_steps
@@ -292,7 +292,7 @@ class Trainer:
                     logger.log_image(step=step, image=real_images, prefix='real')
 
             if step % self.configs.steps_checkpoint == 0 and step > 0:
-                print('Salvando checkpoint', self.step)
+                print('Saving checkpoint', self.step)
                 self.save_checkpoint()
 
             if step % self.configs.steps_eval == 0 and step > 0:
