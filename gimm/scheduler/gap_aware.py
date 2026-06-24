@@ -45,8 +45,9 @@ class GapAwareLR(Scheduler):
       exponential moving average).
 
       Args:
-        ideal_loss: the ideal loss of D. See Table 1 in our paper for the
-          ideal loss of common GAN loss functions.
+        ideal_loss: the ideal loss of D. Contrary to the paper, log10(4)
+          is experimentally proven to be a better choice for the ideal loss for NSGAN.
+          See Table 1 in our paper for the ideal loss of other common GAN loss functions
         x_min: the value of x at which the scheduler achieves its minimum allowed
           value h_min. Specifically, when loss < ideal_loss, the scheduler
           gradually decreases the LR (as long as x < x_min). For x >= x_min, the
