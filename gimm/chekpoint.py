@@ -33,15 +33,16 @@ class Checkpoint:
         self.scheduler_discriminator = scheduler_discriminator
         self.args = args or {}
         self.configs = configs or TrainerConfig()
-        path = self.get_checkpoint_path()
+        path = pathlib.Path(self.get_checkpoint_path())
         if path:
             # Clean Checkpoint Directory
             if self.configs.delete_checkpoint:
-                clean_dir_deep(pathlib.Path(path))
+                clean_dir_deep(path)
 
             # Ensure the checkpoint directory is empty if not resuming from a checkpoint
-            has_some_checkpoint = self.configs.resume_checkpoint or self.configs.pretrained
-            if not has_some_checkpoint and any(pathlib.Path(path).iterdir()):
+            want_to_use_checkpoint = self.configs.resume_checkpoint or self.configs.pretrained
+            has_checkpoint_files = path.exists() and any(path.iterdir())
+            if not want_to_use_checkpoint and has_checkpoint_files:
                 error_message = (
                     f"Checkpoint directory {path} is not empty and resume_checkpoint is not set. "
                     f"This can lead to unexpected overwrite. Please select a different path."
@@ -185,13 +186,13 @@ def unwrap_model(model):
 
     return model
 
-
 def clean_dir_deep(path: pathlib.Path):
     if not path.exists():
         return
 
-    for path in path.iterdir():
-        if path.is_dir():
-            clean_dir_deep(path)
+    for child in path.iterdir():
+        if child.is_dir():
+            clean_dir_deep(child)
+            child.rmdir()
         else:
-            path.unlink()
+            child.unlink()
