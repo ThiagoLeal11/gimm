@@ -8,7 +8,7 @@ def dataset_loader(
         batch_size: int,
         num_workers: int,
         data_dir: str,
-        split_config: Optional[list[int]] = None,
+        split_config: Optional[list[int | float]] = None,
         bake: bool = False,
         bake_type: str = 'memory',
         bake_path: Optional[str] = None,
@@ -34,6 +34,9 @@ def dataset_loader(
     elif name == "celeba":
         from gimm.datasets.benchmark.celeba import DatasetCelebA
         return DatasetCelebA(**kwargs)
+    elif name in {"lsun_bedrooms", "lsun_bedroom"}:
+        from gimm.datasets.benchmark.lsun_bedrooms import DatasetLSUNBedrooms
+        return DatasetLSUNBedrooms(**kwargs)
     elif name == "pistachio2":
         from gimm.datasets.debug.pistachio import DatasetPistachio1
         return DatasetPistachio1(**kwargs)
