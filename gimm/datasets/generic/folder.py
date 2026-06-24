@@ -38,8 +38,11 @@ class FolderDataset(Dataset):
         self._buffer['dataset_full'] = dataset
 
     def setup(self, stage: Literal["train", "test"]):
+        has_train = self.dataset_train is not None and stage == 'train'
+        has_test = self.dataset_test is not None and stage == 'test'
+
         # Setup was already completed in a previous step
-        if self.dataset_train is not None and stage == 'train' or self.dataset_test is not None and stage == 'test':
+        if has_train or has_test:
             return
 
         train, val, test = self._split_dataset(self._buffer.pop('dataset_full'), self.split)

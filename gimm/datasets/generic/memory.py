@@ -9,9 +9,6 @@ class MemoryDataset(Dataset):
     def definitions(self):
         self.split = [0, 0, 0]
 
-    def prepare_data(self):
-        pass
-
     def setup(self, stage: str):
         if stage == 'train':
             baked_self = cast(TorchDataset, cast(object, self))
