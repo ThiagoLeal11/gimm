@@ -10,8 +10,7 @@ class CombineSchedulers(Scheduler):
         param_name: str = "lr",
         last_step: int = -1,
     ):
-        optimizer = schedulers[0].optimizer
-        super().__init__(optimizer, param_name, last_step)
+        super().__init__(param_name, last_step)
 
         self.schedulers = schedulers
         self.tween = tween
@@ -19,7 +18,7 @@ class CombineSchedulers(Scheduler):
         if len(schedulers) != 2:
             raise ValueError("CombineSchedulers only supports two schedulers.")
 
-    def _compute_lr(self, t: int) -> list[float]:
+    def compute_step(self, t: int) -> list[float]:
         tween = self.tween(t)
         values = [
             scheduler.compute_step(t) for scheduler in self.schedulers

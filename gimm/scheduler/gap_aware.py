@@ -86,14 +86,14 @@ class GapAwareLR(Scheduler):
         self.x_max = x_max
         self.h_min = h_min
         self.f_max = f_max
-        self.current_loss = 0.0
 
-        self.smoothed_loss = None
+        self.smoothed_loss = ideal_loss
 
-    def _compute_lr(self, t: int) -> list[float]:
-        x = abs(self.current_loss - self.ideal_loss)
+    def compute_step(self, t: int) -> list[float]:
+        self.smoothed_loss = 0.95 * self.smoothed_loss + 0.05 * self.current_loss
+        x = abs(self.smoothed_loss - self.ideal_loss)
 
-        if self.current_loss > self.ideal_loss:
+        if self.smoothed_loss > self.ideal_loss:
             factor = clip(self.f_max ** (x / self.x_max), 1.0, self.f_max)
         else:
             factor = clip(self.h_min ** (x / self.x_min), self.h_min, 1.0)
@@ -102,13 +102,7 @@ class GapAwareLR(Scheduler):
             lr * factor
             for lr in self.base_lrs
         ]
-
-    def step(self, t: int = None, current_loss: float = None) -> list[float]:
-        if self.smoothed_loss is None:
-            self.smoothed_loss = current_loss
-
-        self.smoothed_loss = 0.95 * self.smoothed_loss + 0.05 * current_loss
-        return super().step(t, self.smoothed_loss)
+    # TODO: Executar esse scheduler antes de atualizar os pesos (before loss.backward() function)
 
     def __repr__(self):
         return (

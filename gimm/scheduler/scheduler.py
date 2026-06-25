@@ -1,5 +1,6 @@
 import copy
 from abc import ABC, abstractmethod
+from typing import Any, Optional
 
 import torch.optim
 
@@ -22,7 +23,7 @@ class Scheduler(ABC):
         last_step: int = -1,
         updates_per_step: int = 1,
     ):
-        self.optimizer: torch.optim.Optimizer = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
         self.param_name = param_name
         self.initial_param_name = f"initial_{param_name}"
         self.updates_per_step = updates_per_step
@@ -36,26 +37,28 @@ class Scheduler(ABC):
     def construct(self, optimizer: torch.optim.Optimizer) -> 'Scheduler':
         new_scheduler = copy.deepcopy(self)
         new_scheduler.optimizer = optimizer
+        assert new_scheduler.optimizer is not None
 
         new_scheduler.base_lrs = [
-            group.get(self.initial_param_name) or group.get(self.param_name)
+            float(group.get(self.initial_param_name) or group[self.param_name] or 0)
             for group in new_scheduler.optimizer.param_groups
         ]
         return new_scheduler
 
-    def state_dict(self) -> dict[str, any]:
+    def state_dict(self) -> dict[str, Any]:
         return {
             key: value for key, value in self.__dict__.items() if key != "optimizer"
         }
 
-    def load_state_dict(self, state_dict: dict[str, any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self.__dict__.update(state_dict)
 
     @abstractmethod
-    def _compute_lr(self, t: int) -> list[float]:
+    def compute_step(self, t: int) -> list[float]:
         pass
 
     def update_groups(self, values: list[float]):
+        assert self.optimizer is not None
         if not isinstance(values, (list, tuple)):
             values = [values] * len(self.optimizer.param_groups)
 
@@ -66,17 +69,15 @@ class Scheduler(ABC):
                 param_group[self.param_name] = value
 
     def get_current_lrs(self) -> list[float]:
+        assert self.optimizer is not None
         return [group[self.param_name] for group in self.optimizer.param_groups]
 
-    def compute_step(self, t: int) -> list[float]:
+    def step(self, t: Optional[int] = None, current_loss: Optional[float] = None) -> list[float]:
+        self.current_loss = current_loss
+
         if t is None:
             t = self.current_step + 1
-            self.current_step = t
-
-        return self._compute_lr(t)
-
-    def step(self, t: int = None, current_loss: float = None) -> list[float]:
-        self.current_loss = current_loss
+        self.current_step = t
 
         lrs = self.compute_step(t)
         self.update_groups(lrs)

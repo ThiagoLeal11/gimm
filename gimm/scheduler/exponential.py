@@ -21,7 +21,7 @@ class ExponentialLR(Scheduler):
         super(ExponentialLR, self).__init__(param_name, last_step, updates_per_step)
         self.gamma = gamma
 
-    def _compute_lr(self, t: int) -> list[float]:
+    def compute_step(self, t: int) -> list[float]:
         # t starts at 1 after first step() call, so we use (t-1) to start from base_lr
         progress = (t - 1) / self.last_step if self.last_step > 0 else 0
         return [base_lr * (self.gamma ** progress) for base_lr in self.base_lrs]
