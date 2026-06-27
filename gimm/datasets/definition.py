@@ -1,3 +1,4 @@
+import shutil
 from abc import ABC, abstractmethod
 from functools import lru_cache
 import hashlib
@@ -31,6 +32,8 @@ def _load_bake_dataset_class(bake_type: str) -> type["Dataset"]:
 
 
 class Dataset(ABC):
+    bake_cache_enabled = True
+
     def __init__(
         self,
         batch_size: int,
@@ -203,19 +206,18 @@ class Dataset(ABC):
     def setup(self, stage: Literal["train", "test"]):
         pass
 
-    def _compute_hash(self, split: Split) -> str:
-        dataset = self.get_dataset(split)
+    def _compute_bake_hash(self) -> str:
         payload = {
-            'dataset_name': type(self).__name__,
-            'split': split,
+            'dataset_name': self.dataset_name or type(self).__name__,
             'dims': list(self.dims or []),
+            'classes': [
+                {'index': int(index), 'name': str(name)}
+                for index, name in sorted(self.classes.items())
+            ],
             'seed': self.seed,
-            'bake_min_size': self.bake_min_size,
-            'source': {
-                'type': type(dataset).__qualname__,
-                'module': type(dataset).__module__,
-                'size': len(dataset),
-            },
+            'bake_type': self.bake_type,
+            'data_dir': str(pathlib.Path(self.data_dir)),
+            'split_config': list(self.split_config) if self.split_config is not None else None,
             'transforms': [{
                 'module': type(transform).__module__,
                 'name': type(transform).__qualname__,
@@ -225,24 +227,50 @@ class Dataset(ABC):
         encoded = json.dumps(payload, sort_keys=True, default=str).encode('utf-8')
         return hashlib.sha256(encoded).hexdigest()[:16]
 
-    def _resolve_bake_path(self, split: Split) -> pathlib.Path:
-        transform_hash = self._compute_hash(split)
-        file_name = f'{self.dataset_name}/{split}/{transform_hash}'
+    def _get_bake_root(self) -> pathlib.Path:
+        if self.bake_path in (None, ''):
+            return pathlib.Path(tempfile.gettempdir()) / 'gimm' / 'baked_dataset' / self.dataset_name
 
-        template = self.bake_path
-        if template is None or template == '':
-            base_dir = pathlib.Path(tempfile.gettempdir()) / 'gimm' / 'baked_dataset'
-            return base_dir / file_name
+        return pathlib.Path(self.bake_path) / self.dataset_name
 
-        placeholders = {'dataset_name', 'split', 'transform_hash'}
-        if any(f'{{{placeholder}}}' in template for placeholder in placeholders):
-            return pathlib.Path(template.format(
-                dataset_name=self.dataset_name,
-                split=split,
-                transform_hash=transform_hash,
-            ))
+    def _clean_previous_bakes(self):
+        if not self.bake_cache_enabled:
+            return
 
-        return pathlib.Path(template) / file_name
+        root_path = self._get_bake_root()
+        current_hash = self._compute_bake_hash()
+
+        if not root_path.exists():
+            return
+
+        for child in root_path.iterdir():
+            if child.is_dir() and child.name != current_hash:
+                shutil.rmtree(child, ignore_errors=True)
+
+    def _load_baked(self, split: Split) -> Optional[DataLoader]:
+        if not self.bake_cache_enabled:
+            return None
+
+        bake_path = self._get_bake_root() / self._compute_bake_hash() / split
+        if not bake_path.exists() or not bake_path.is_dir():
+            return None
+
+        try:
+            baked_dataset = self._create_baked_dataset(split)
+            if baked_dataset.get_dataset(split) is None:
+                baked_dataset.setup('test' if split == 'test' else 'train')
+
+            if baked_dataset.get_dataset(split) is None:
+                return None
+
+            self.set_baked(split, baked_dataset)
+            self._clean_previous_bakes()
+            print(f"Reusing baked dataset cache for '{split}' using {self.bake_type} backend...")
+            return baked_dataset.build_dataloader(split)
+        except Exception as exc:
+            logging.warning(f"Could not reuse baked dataset for '{split}': {exc}. Rebuilding cache.")
+            shutil.rmtree(bake_path.parent, ignore_errors=True)
+            return None
 
     @staticmethod
     def _build_collate_fn(transforms: Sequence[Callable]):
@@ -319,29 +347,24 @@ class Dataset(ABC):
         self.dynamic_transforms = self.dynamic_transforms + transformations
 
     def _build_baked_loader(self, split: Split, loader: DataLoader) -> DataLoader:
+        cached_loader = self._load_baked(split)
+        if cached_loader is not None:
+            return cached_loader
+
+        self._clean_previous_bakes()
         baked_dataset = self._create_baked_dataset(split)
-        repetitions = self._get_bake_repetitions(split)
+        print(f"Preparing baked dataset for '{split}' using {self.bake_type} backend...")
         progress_loader = tqdm(
-            self._repeat_loader(loader, repetitions),
-            total=len(loader) * repetitions,
-            desc=f"Baking {self.dataset_name} {split}" + (f" x{repetitions}" if repetitions > 1 else ''),
+            loader,
+            total=len(loader),
+            desc=f"Baking {self.dataset_name} {split}",
             leave=False,
         )
         baked_dataset.populate(progress_loader, split=split)
 
         self.set_baked(split, baked_dataset)
+        print(f"Baked dataset for '{split}' is done!")
         return baked_dataset.build_dataloader(split)
-
-    def _get_bake_repetitions(self, split: Split) -> int:
-        if split != 'train' or self.bake_min_size <= 0:
-            return 1
-
-        dataset = self.get_dataset(split)
-        dataset_size = len(dataset)
-        if dataset_size <= 0:
-            return 1
-
-        return max(1, (self.bake_min_size + dataset_size - 1) // dataset_size)
 
     @staticmethod
     def _repeat_loader(loader: DataLoader, repetitions: int):
@@ -361,9 +384,7 @@ class Dataset(ABC):
         loader = self.build_dataloader(split, shuffle=initial_shuffle)
         # Bake the dataset if needed
         if self.bake and self.static_transforms:
-            print(f"Preparing baked dataset for '{split}' using {self.bake_type} backend...")
             loader = self._build_baked_loader(split, loader)
-            print(f"Baked dataset for '{split}' is done!")
 
         self._loaders[split] = loader
         return loader

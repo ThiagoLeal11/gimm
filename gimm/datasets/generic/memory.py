@@ -6,6 +6,8 @@ from gimm.datasets.definition import Dataset, Batch, Split
 
 
 class MemoryDataset(Dataset):
+    bake_cache_enabled = False
+
     def definitions(self):
         self.split = [0, 0, 0]
 
