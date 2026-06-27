@@ -73,8 +73,8 @@ class Dataset(ABC):
 
         self.dims: Sequence[int] = dims or []
         self.classes: dict[int, str] = classes or {}
-        self.static_transforms = static_transforms
-        self.dynamic_transforms = dynamic_transforms
+        self.static_transforms: Sequence[Callable] = static_transforms
+        self.dynamic_transforms: Sequence[Callable] = dynamic_transforms
         self.bake = bake
         self.bake_type = bake_type
         self.bake_path = bake_path
@@ -148,7 +148,7 @@ class Dataset(ABC):
         if sum(split_sizes) != full_len:
             raise ValueError(f"Split sizes {split_sizes} do not match dataset length {full_len}")
 
-        return split_sizes
+        return [int(size) for size in split_sizes]
 
     def _split_dataset(self, full_dataset, split: Sequence[int | float]):
         split_sizes = self._compute_split(full_dataset, split)
@@ -188,7 +188,7 @@ class Dataset(ABC):
         setattr(self, f"dataset_{split}", dataset)
 
     def set_baked(self, split: Split, dataset: TorchDataset):
-        setattr(self, f"baked_{split}", dataset)
+        setattr(self, f"_baked_dataset_{split}", dataset)
 
     @abstractmethod
     def definitions(self):
@@ -297,7 +297,8 @@ class Dataset(ABC):
             persistent_workers=self.persistent_workers,
             static_transforms=[],
             dynamic_transforms=self.dynamic_transforms,
-            data_dir=str(pathlib.Path(self.bake_path) / split),
+            data_dir=str(self._get_bake_root() / self._compute_bake_hash() / split),
+            split_config=[0,0,0]
         )
         return dataset
 

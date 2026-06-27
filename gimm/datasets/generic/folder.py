@@ -1,5 +1,4 @@
 import logging
-from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Literal
 
@@ -12,7 +11,7 @@ from gimm.datasets.definition import Dataset, Split, Batch
 
 class FolderDataset(Dataset):
     def definitions(self):
-        is_on_baking = bool(self.dims) and bool(self.classes) and self.split_config is None
+        is_on_baking = bool(self.dims) and bool(self.classes) and (self.split_config is None or sum(self.split_config) == 0)
         dataset = self._load_image_folder()
 
         if dataset is None:
@@ -56,7 +55,7 @@ class FolderDataset(Dataset):
         split_root = Path(self.data_dir)
         split_root.mkdir(parents=True, exist_ok=True)
 
-        counters: dict[str, int] = defaultdict(int)
+        sample_index = 0
         for samples, labels in dataloader:
             for sample, label in zip(samples, labels):
                 # Ensure class folder
@@ -65,9 +64,9 @@ class FolderDataset(Dataset):
                 class_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save image
-                counters[class_name] += 1
-                output_path = class_dir / f'{counters[class_name]:05d}.png'
+                output_path = class_dir / f'{sample_index:08d}.png'
                 write_png(self.to_int8_image(sample), str(output_path))
+                sample_index += 1
 
         dataset = self._load_image_folder()
         if dataset is None:
@@ -89,9 +88,19 @@ class FolderDataset(Dataset):
             return None
 
         try:
-            return ImageFolder(self.data_dir, loader=read_image)
+            dataset = ImageFolder(self.data_dir, loader=read_image)
+            dataset = self.sort_samples(dataset)
+            return dataset
         except FileNotFoundError:
             return None
+
+    @staticmethod
+    def sort_samples(dataset: ImageFolder) -> ImageFolder:
+        # Sort samples by filename stem (numeric order) to ensure consistent ordering across runs
+        dataset.samples.sort(key=lambda item: int(Path(item[0]).stem))
+        dataset.imgs = dataset.samples
+        dataset.targets = [label for _, label in dataset.samples]
+        return dataset
 
     @staticmethod
     def _label_to_int(label: torch.Tensor | int) -> int:
