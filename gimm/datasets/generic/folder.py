@@ -55,6 +55,9 @@ class FolderDataset(Dataset):
         split_root = Path(self.data_dir)
         split_root.mkdir(parents=True, exist_ok=True)
 
+        total = len(self.bake_parent_dataset or self)
+        width = max(1, len(str(total)))
+
         sample_index = 0
         for samples, labels in dataloader:
             for sample, label in zip(samples, labels):
@@ -64,7 +67,7 @@ class FolderDataset(Dataset):
                 class_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save image
-                output_path = class_dir / f'{sample_index:08d}.png'
+                output_path = class_dir / f'{sample_index:0{width}d}.png'
                 write_png(self.to_int8_image(sample), str(output_path))
                 sample_index += 1
 

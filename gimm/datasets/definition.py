@@ -78,8 +78,7 @@ class Dataset(ABC):
         self.bake = bake
         self.bake_type = bake_type
         self.bake_path = bake_path
-        self.bake_min_size = bake_min_size
-        assert self.bake_min_size >= 0, "bake_min_size must be >= 0. Use 0 to disable duplication."
+        self.bake_parent_dataset: Optional[Dataset] = None
         self._buffer: dict[str, Any] = {}
         self.definitions()
 
@@ -300,6 +299,7 @@ class Dataset(ABC):
             data_dir=str(self._get_bake_root() / self._compute_bake_hash() / split),
             split_config=[0,0,0]
         )
+        dataset.bake_parent_dataset = self.get_dataset(split)
         return dataset
 
     def add_static_transforms(self, transformations: list[Callable], replace: bool = False, index: int = 0):
@@ -367,6 +367,13 @@ class Dataset(ABC):
 
         self._loaders[split] = loader
         return loader
+
+    def __len__(self):
+        return sum(
+            len(dataset)
+            for dataset in [self.dataset_train, self.dataset_val, self.dataset_test]
+            if dataset is not None
+        )
 
     def train_dataloader(self):
         return self._get_or_create_loader('train')
