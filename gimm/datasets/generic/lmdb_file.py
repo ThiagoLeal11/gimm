@@ -78,7 +78,7 @@ class LMDBDataset(Dataset):
                                 f"LMDBDataset expected samples with shape {tuple(self.dims)}, got {tuple(sample.shape)}.",
                             )
 
-                        payload = LMDBTorchDataset._serialize((sample.detach().cpu().clone(), self._clone_label(label)))
+                        payload = LMDBTorchDataset._serialize_sample(sample, label)
                         txn.put(self._sample_key(count), payload)
                         count += 1
 
@@ -90,8 +90,12 @@ class LMDBDataset(Dataset):
                     'dims': tuple(self.dims),
                     'classes': dict(self.classes),
                     'split': split,
+                    'sample_dtype': str(sample.dtype),
+                    'label_dtype': str(label.dtype),
+                    'label_shape': tuple(label.shape),
                 }
-                txn.put(LMDBTorchDataset._METADATA_KEY, LMDBTorchDataset._serialize(metadata))
+                metadata_payload = bytes(LMDBTorchDataset._serialize_metadata(metadata))
+                txn.put(b'__metadata__', metadata_payload)
         finally:
             env.close()
 
