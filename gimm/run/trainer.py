@@ -187,6 +187,7 @@ class Trainer:
             transforms.Resize(new_size, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.CenterCrop((target_h, target_w))
         ])
+        dataset.dims = (target_ch, target_h, target_w)
         return dataset
 
     def get_image_examples(self):
@@ -358,8 +359,8 @@ class Trainer:
         }
         it_s = batch[0].size(0) / (time_end - time_start)
         metrics = {
-            **self.model.log_generator_loss(g_loss),
-            **self.model.log_discriminator_loss(d_loss),
+            **(self.model.log_generator_loss(g_loss) if g_loss is not None else {}),
+            **(self.model.log_discriminator_loss(d_loss) if d_loss is not None else {}),
             **lrs_g,
             **lrs_d,
             'its': it_s
