@@ -11,11 +11,10 @@ from gimm.datasets.definition import Dataset, Split, Batch
 
 class FolderDataset(Dataset):
     def definitions(self):
-        is_on_baking = bool(self.dims) and bool(self.classes) and (self.split_config is None or sum(self.split_config) == 0)
         dataset = self._load_image_folder()
 
         if dataset is None:
-            if not is_on_baking:
+            if not self.is_on_baking:
                 raise ValueError(
                     f"FolderDataset requires images under '{self.data_dir}' or explicit `dims` and `classes` for empty roots.",
                 )

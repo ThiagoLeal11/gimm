@@ -10,11 +10,10 @@ from gimm.datasets.generic._lmdb_dataset import LMDBTorchDataset
 
 class LMDBDataset(Dataset):
     def definitions(self):
-        is_on_baking = bool(self.dims) and bool(self.classes) and self.split_config is None
         dataset = self._load_lmdb_dataset()
 
         if dataset is None:
-            if not is_on_baking:
+            if not self.is_on_baking:
                 raise ValueError(
                     f"LMDBDataset requires an LMDB store under '{self.data_dir}' or explicit `dims` and `classes` for empty roots.",
                 )

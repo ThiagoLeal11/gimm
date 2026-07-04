@@ -82,6 +82,7 @@ class Dataset(ABC):
         self.bake_type = bake_type
         self.bake_path = bake_path
         self.bake_parent_dataset: Optional[Dataset] = None
+        self.is_on_baking = bake_will_populate
         self._buffer: dict[str, Any] = {}
         self.definitions()
 
@@ -310,7 +311,7 @@ class Dataset(ABC):
             generator=self._generator(),
         )
 
-    def _create_baked_dataset(self, split: Split) -> 'Dataset':
+    def _create_baked_dataset(self, split: Split, will_populate: bool = False) -> 'Dataset':
         backend_cls = _load_bake_dataset_class(self.bake_type)
         dataset = backend_cls(
             dims=self.dims,
@@ -325,7 +326,8 @@ class Dataset(ABC):
             static_transforms=[],
             dynamic_transforms=self.dynamic_transforms,
             data_dir=str(self._get_bake_root() / self._compute_bake_hash() / split),
-            split_config=[0,0,0]
+            split_config=[0,0,0],
+            bake_will_populate=will_populate,
         )
         dataset.bake_parent_dataset = self.get_dataset(split)
         return dataset
@@ -352,7 +354,7 @@ class Dataset(ABC):
             return cached_loader
 
         self._clean_previous_bakes()
-        baked_dataset = self._create_baked_dataset(split)
+        baked_dataset = self._create_baked_dataset(split, will_populate=True)
         print(f"Preparing baked dataset for '{split}' using {self.bake_type} backend...")
         progress_loader = tqdm(
             loader,
