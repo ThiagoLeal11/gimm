@@ -270,7 +270,7 @@ class Dataset(ABC):
             return baked_dataset.build_dataloader(split)
         except Exception as exc:
             logging.warning(f"Could not reuse baked dataset for '{split}': {exc}. Rebuilding cache.")
-            shutil.rmtree(bake_path.parent, ignore_errors=True)
+            self._clean_previous_bakes()
             return None
 
     @staticmethod
