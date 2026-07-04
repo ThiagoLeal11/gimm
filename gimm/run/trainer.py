@@ -219,7 +219,6 @@ class Trainer:
             bake=cfg.dataset_bake,
             bake_type=cfg.dataset_bake_type,
             bake_path=cfg.dataset_bake_path,
-            bake_min_size=cfg.dataset_bake_min_size,
         )
 
         if self.configs.validation_policy == 'strict' and dataset.get_splits()[1] < cfg.validation_samples:

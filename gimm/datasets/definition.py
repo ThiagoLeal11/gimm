@@ -53,7 +53,7 @@ class Dataset(ABC):
         bake: bool = False,
         bake_type: Literal['memory', 'lmdb', 'folder'] = 'memory',
         bake_path: Optional[str] = None,
-        bake_min_size: int = 0,
+        bake_will_populate: bool = False,
 
         split_config: Optional[list[int | float]] = None,
     ):
